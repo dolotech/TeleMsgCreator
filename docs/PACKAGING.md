@@ -194,6 +194,11 @@ start.bat       :: 真正跑一次
 **Q：macOS 包双击提示「无法验证开发者」？**
 因为没做 Apple 签名。右键 →「打开」，或执行 `xattr -dr com.apple.quarantine ./TeleMsgCreator`。
 
+**Q：8765 端口被别的程序占用了怎么办？**
+程序会**自动换一个空闲端口**并在控制台打印实际地址（8765 → 8766 → …）。
+想固定端口，先用 `edit-config.bat` 改 `TELEMSG_UI_PORT`，
+或者把占用端口的程序关掉。查看占用者：Windows 用 `netstat -ano | findstr :8765`。
+
 ## 八、接 CI 的话
 
 Windows 包可以在 **Linux/macOS 的 CI** 上直接构建（这正是本方案的价值）。

@@ -37,9 +37,11 @@ Q: 浏览器没有自动打开
 A: 手动打开浏览器访问 http://127.0.0.1:8765 即可。
 
 Q: 提示端口被占用（address already in use）
-A: 说明已经有一个在跑了，直接访问上面的网址；或者先在任务管理器里
-   结束 python.exe。也可以双击 edit-config.bat，把 TELEMSG_UI_PORT
-   改成 8766 之类的其它端口。
+A: 程序会自动换一个空闲端口，并把这行打印在窗口里：
+     Web 编辑器： http://127.0.0.1:8766
+   直接用打印出来的那个地址即可。
+   想固定端口：双击 edit-config.bat，把 TELEMSG_UI_PORT 改成别的值；
+   想找出谁占着 8765：在命令行执行 netstat -ano | findstr :8765。
 
 Q: 发送时提示 chat not found / 找不到会话
 A: 机器人还没有加入目标频道。打开频道 → 管理 → 管理员 → 添加这个机器人，

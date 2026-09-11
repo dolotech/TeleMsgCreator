@@ -50,6 +50,7 @@ def run_checks(settings: Settings, *, online: bool = True) -> list[Check]:
     checks.append(_env_file_check(settings))
     checks.append(_token_check(settings))
     checks.append(_web_check())
+    checks.append(_port_check(settings))
     if online:
         checks.append(_network_check(settings))
     return checks
@@ -153,6 +154,21 @@ def _web_check() -> Check:
             hint="打包版请重新解压；源码运行请 pip install -e \".[web]\"",
         )
     return Check("Web 编辑器", True, "可用")
+
+
+def _port_check(settings: Settings) -> Check:
+    from .netutil import is_port_free
+
+    host, port = settings.ui_host, settings.ui_port
+    if is_port_free(host, port):
+        return Check("Web 端口", True, f"{host}:{port} 可用")
+    return Check(
+        "Web 端口",
+        False,
+        f"{host}:{port} 已被占用",
+        hint="不影响启动：程序会自动换一个空闲端口并提示实际地址。"
+        "如果那就是你已经开着的实例，直接访问它即可",
+    )
 
 
 def _network_check(settings: Settings) -> Check:

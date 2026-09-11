@@ -15,7 +15,9 @@ if not exist "python.exe" (
 echo ============================================================
 echo   TeleMsgCreator
 echo ------------------------------------------------------------
-echo   A browser window will open at http://127.0.0.1:8765
+echo   A browser window will open automatically.
+echo   The exact address is printed below (port may change if 8765
+echo   is already taken by another program).
 echo   Keep this window open while you use the editor.
 echo   Close this window (or press Ctrl+C) to stop.
 echo ============================================================

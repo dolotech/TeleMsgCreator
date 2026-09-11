@@ -16,7 +16,7 @@ from rich.logging import RichHandler
 from rich.panel import Panel
 from rich.table import Table
 
-from . import __version__
+from . import __version__, netutil
 from .client import TelegramClient, mask_token
 from .config import Settings, get_settings
 from .diagnostics import explain
@@ -41,6 +41,9 @@ app.add_typer(webhook_app, name="webhook")
 console = Console()
 err_console = Console(stderr=True, style="bold red")
 VERBOSE = False
+
+#: 绑定失败后最多重试几次（每次都会重新挑一个空闲端口）
+MAX_PORT_TRIES = 5
 
 
 # ---------------------------------------------------------------- helpers
@@ -707,6 +710,11 @@ def serve(
     host: str | None = typer.Option(None, "--host"),
     port: int | None = typer.Option(None, "--port"),
     open_browser: bool = typer.Option(False, "--open", help="启动后自动打开浏览器（打包版默认带上）"),
+    port_fallback: bool = typer.Option(
+        True,
+        "--port-fallback/--no-port-fallback",
+        help="端口被占用时自动改用其它端口（默认开启）",
+    ),
     token: str | None = typer.Option(None, "--token"),
     api_base: str | None = typer.Option(None, "--api-base"),
     db: Path | None = typer.Option(None, "--db"),
@@ -723,39 +731,106 @@ def serve(
 
     application = create_app(settings)
     ui_host = host or settings.ui_host
-    ui_port = port or settings.ui_port
-    # 127.0.0.1 上打开的浏览器用 localhost，避免某些 Windows 环境回环解析异常
-    browse_host = "127.0.0.1" if ui_host in {"0.0.0.0", "::"} else ui_host
-    url = f"http://{browse_host}:{ui_port}"
-    console.print(
-        Panel.fit(
-            f"Web 编辑器： {url}\n"
-            f"数据库： {settings.db_path}\n"
-            f"Token： {mask_token(settings.resolved_token)}"
-            + ("\n[yellow]已开启基础认证（用户名 telemsg）[/yellow]" if settings.ui_password else ""),
-            title="TeleMsgCreator",
-            border_style="cyan",
+    requested = port or settings.ui_port
+    log_level = "debug" if verbose else "info"
+    port_file = Path(settings.db_path).parent / "server.port"
+
+    attempted: list[int] = []
+    for _ in range(MAX_PORT_TRIES):
+        if port_fallback:
+            ui_port, changed = netutil.pick_port(ui_host, requested)
+            if changed and not attempted:
+                console.print(
+                    f"[yellow]端口 {requested} 已被占用[/yellow]，"
+                    f"自动改用 [bold]{ui_port}[/bold]"
+                )
+        else:
+            ui_port = requested
+            if not netutil.is_port_free(ui_host, ui_port):
+                console.print(
+                    Panel.fit(
+                        f"端口 {ui_port} 已被其它程序占用。\n\n"
+                        "可以：\n"
+                        f"  · 换个端口启动： telemsg serve --port {ui_port + 1}\n"
+                        "  · 或允许自动换端口（默认行为）：去掉 --no-port-fallback\n"
+                        "  · 找出占用者： lsof -i :8765   /   Windows: netstat -ano | findstr :8765",
+                        title="[red]端口被占用[/red]",
+                        border_style="red",
+                    )
+                )
+                raise typer.Exit(1)
+
+        # 127.0.0.1 上打开的浏览器用 localhost，避免某些 Windows 环境回环解析异常
+        browse_host = "127.0.0.1" if ui_host in {"0.0.0.0", "::"} else ui_host
+        url = f"http://{browse_host}:{ui_port}"
+        console.print(
+            Panel.fit(
+                f"Web 编辑器： {url}\n"
+                f"数据库： {settings.db_path}\n"
+                f"Token： {mask_token(settings.resolved_token)}"
+                + (
+                    "\n[yellow]已开启基础认证（用户名 telemsg）[/yellow]"
+                    if settings.ui_password
+                    else ""
+                ),
+                title="TeleMsgCreator",
+                border_style="cyan",
+            )
         )
-    )
-    if open_browser:
-        import threading
-        import webbrowser
+        _write_port_file(port_file, browse_host, ui_port)
 
-        def _open() -> None:
-            try:
-                webbrowser.open(url, new=2)
-            except Exception:  # noqa: BLE001 - 打不开浏览器不该影响服务本身
-                console.print(f"[yellow]自动打开浏览器失败，请手动访问 {url}[/yellow]")
+        if open_browser:
+            import threading
+            import webbrowser
 
-        console.print(f"[dim]正在打开浏览器…若没有自动打开，请手动访问 {url}[/dim]")
-        threading.Timer(1.5, _open).start()
-    uvicorn.run(
-        application,
-        host=ui_host,
-        port=ui_port,
-        reload=reload,
-        log_level="debug" if verbose else "info",
-    )
+            # 用默认参数把当前 URL 绑死：闭包按引用捕获循环变量，
+            # 若在 1.5 秒内又重试了一轮，会打开错误的端口
+            def _open(target: str = url) -> None:
+                try:
+                    webbrowser.open(target, new=2)
+                except Exception:  # noqa: BLE001 - 打不开浏览器不该影响服务本身
+                    console.print(f"[yellow]自动打开浏览器失败，请手动访问 {target}[/yellow]")
+
+            console.print(f"[dim]正在打开浏览器…若没有自动打开，请手动访问 {url}[/dim]")
+            threading.Timer(1.5, _open).start()
+
+        try:
+            uvicorn.run(
+                application,
+                host=ui_host,
+                port=ui_port,
+                reload=reload,
+                log_level=log_level,
+            )
+            return
+        except OSError as exc:
+            # 探测与绑定之间存在竞态，端口可能刚被抢走
+            if not netutil.is_address_in_use(exc):
+                raise
+            attempted.append(ui_port)
+            if not port_fallback:
+                _fail(f"端口 {ui_port} 绑定失败：已被占用")
+            console.print(f"[yellow]端口 {ui_port} 刚刚被占用，换一个重试…[/yellow]")
+        finally:
+            _remove_port_file(port_file)
+
+    _fail(f"连续尝试了 {attempted} 都未能绑定成功，请用 --port 指定一个空闲端口")
+
+
+def _write_port_file(path: Path, host: str, port: int) -> None:
+    """把实际监听地址写下来，方便工具与用户发现「这次到底用的哪个端口」。"""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"{host}:{port}\n", encoding="utf-8")
+    except OSError as exc:  # pragma: no cover - 目录不可写时不应阻断启动
+        console.print(f"[dim]提示：无法写入 {path}（{exc}）[/dim]")
+
+
+def _remove_port_file(path: Path) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:  # pragma: no cover
+        pass
 
 
 @app.command("schema")

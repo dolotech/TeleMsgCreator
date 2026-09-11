@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from typer.testing import CliRunner
 
 from telemsg.cli import app
@@ -100,3 +101,35 @@ def test_validate_prints_hints(tmp_path) -> None:
     assert result.exit_code == 2
     assert "4096" in result.stdout
     assert "拆分为多条消息" in result.stdout
+
+
+def test_serve_no_port_fallback_reports_busy_port(tmp_path) -> None:
+    """端口被占用且不允许自动切换时，应该给出可执行的提示而不是英文堆栈。"""
+    import socket
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("127.0.0.1", 0))
+    except OSError:
+        pytest.skip("当前环境不允许绑定本地端口")
+    sock.listen(1)
+    busy = sock.getsockname()[1]
+    try:
+        result = runner.invoke(
+            app,
+            [
+                "serve",
+                "--no-port-fallback",
+                "--port",
+                str(busy),
+                "--db",
+                str(tmp_path / "t.db"),
+                "--token",
+                "123:FAKE",
+            ],
+        )
+    finally:
+        sock.close()
+    assert result.exit_code == 1
+    assert "端口被占用" in result.stdout
+    assert "--port" in result.stdout
