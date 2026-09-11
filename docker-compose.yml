@@ -1,0 +1,28 @@
+services:
+  telemsg-web:
+    build: .
+    image: telemsg:1.0.0
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8765:8765"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8765/api/health', timeout=3).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  telemsg-scheduler:
+    build: .
+    image: telemsg:1.0.0
+    restart: unless-stopped
+    command: ["python", "-m", "telemsg", "run-scheduler"]
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - telemsg-web

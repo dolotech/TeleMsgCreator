@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# TeleMsgCreator runtime data
+.venv/
+data/
+preview.html
