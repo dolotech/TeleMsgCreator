@@ -221,6 +221,10 @@ make lint
 
 客户端与调度测试全部基于 `httpx.MockTransport`，不需要真实 token，也不会真发消息。
 
+要提交代码的话，别直接 `git push`——用 `make ship`：它会先跑 lint 与测试、
+扫描凭证泄漏、确认没有分叉，再推送并校验结果。提交信息格式见
+[CONTRIBUTING.md](CONTRIBUTING.md)。
+
 想要端到端验证真实 token：
 
 ```bash
