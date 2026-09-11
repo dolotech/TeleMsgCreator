@@ -1,0 +1,62 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "telemsg"
+version = "1.0.0"
+description = "Production-grade Telegram message composer: photo/video + text + inline buttons, with CLI, Web UI, scheduling and broadcasting."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [{ name = "TeleMsgCreator" }]
+keywords = ["telegram", "bot", "inline-keyboard", "publisher", "automation"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Communications :: Chat",
+]
+
+dependencies = [
+  "httpx>=0.27,<1",
+  "pydantic>=2.6,<3",
+  "pydantic-settings>=2.2,<3",
+  "typer>=0.12,<1",
+  "rich>=13.7,<15",
+  "Jinja2>=3.1,<4",
+  "python-multipart>=0.0.9",
+  "APScheduler>=3.10,<4",
+]
+
+[project.optional-dependencies]
+web = ["fastapi>=0.110", "uvicorn[standard]>=0.29"]
+media = ["Pillow>=10.2"]
+dev = [
+  "pytest>=8.0",
+  "pytest-asyncio>=0.23",
+  "respx>=0.21",
+  "ruff>=0.5",
+]
+
+[project.scripts]
+telemsg = "telemsg.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/telemsg"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "docs", "README.md", "LICENSE"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = ["ignore::DeprecationWarning"]
+markers = ["live: 需要真实 Telegram API 的联调测试（用 TELEMSG_LIVE_TEST=1 开启）"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["B008"]
