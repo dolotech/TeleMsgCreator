@@ -1,7 +1,7 @@
 PY ?= .venv/bin/python
 PIP ?= $(PY) -m pip
 
-.PHONY: help install dev test test-live lint fmt check ship preview serve dry-run scheduler docker clean
+.PHONY: help install dev test test-live lint fmt check ship package-win package-mac package preview serve dry-run scheduler docker clean
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -42,6 +42,15 @@ dry-run: ## 用内置示例走一遍干跑
 
 docker: ## 构建镜像
 	docker build -t telemsg:1.0.0 .
+
+package-win: ## 打包 Windows 绿色免安装版（可在 macOS 上直接执行）
+	$(PY) scripts/build_release.py --target windows
+
+package-mac: ## 打包 macOS 版（需要 pyinstaller，且必须在 macOS 上执行）
+	$(PY) scripts/build_release.py --target macos
+
+package: ## 打包当前系统可产出的全部目标
+	$(PY) scripts/build_release.py --target all
 
 clean: ## 清理本地缓存（保留 data/）
 	rm -rf .pytest_cache .ruff_cache **/__pycache__ build dist *.egg-info

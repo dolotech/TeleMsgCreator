@@ -197,6 +197,23 @@ src/telemsg/
 docker compose up -d          # Web 编辑器 + 调度守护进程
 ```
 
+### 打包成免安装的绿色版
+
+目标机器**不需要安装 Python**：
+
+```bash
+make package-win     # Windows 绿色版：在 macOS 上就能直接构建
+make package-mac     # macOS 版（需要 pyinstaller，且必须在 macOS 上构建）
+make package         # 两者都出
+```
+
+产物在 `dist/`。Windows 包拷过去解压，双击 `start.bat` 即用；
+跑不起来就双击 `doctor.bat` 看自检结果。
+
+> 关键点：PyInstaller **不能交叉编译**，所以「在 Mac 上出 Windows 包」走的是
+> 官方 embeddable 运行时 + 交叉下载 Windows wheel 的路线，全程不需要 Windows 机器。
+> 完整原理、结构说明与踩过的坑见 [`docs/PACKAGING.md`](docs/PACKAGING.md)。
+
 裸机则跑两个进程：
 
 ```bash

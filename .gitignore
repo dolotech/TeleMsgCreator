@@ -221,3 +221,7 @@ __marimo__/
 .venv/
 data/
 preview.html
+
+# 打包产物与中间缓存
+dist/
+build/

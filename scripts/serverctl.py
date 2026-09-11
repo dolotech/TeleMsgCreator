@@ -25,6 +25,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+IS_WINDOWS = os.name == "nt"
+
 ROOT = Path(__file__).resolve().parents[1]
 PID_FILE = ROOT / "data" / "server.pid"
 LOG_FILE = ROOT / "data" / "server.log"
@@ -38,16 +40,50 @@ def _python() -> str:
     return str(candidate) if candidate.exists() else sys.executable
 
 
+def _process_alive(pid: int) -> bool:
+    """判断进程是否存活。
+
+    注意：Windows 上 ``os.kill(pid, 0)`` 并不是「探测」，它会直接
+    TerminateProcess 把进程杀掉，所以必须走 Win32 API。
+    """
+    if IS_WINDOWS:
+        import ctypes
+
+        SYNCHRONIZE = 0x00100000
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        handle = kernel32.OpenProcess(SYNCHRONIZE, False, pid)
+        if not handle:
+            return False
+        try:
+            # WAIT_OBJECT_0 表示进程已退出
+            return kernel32.WaitForSingleObject(handle, 0) != 0
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _terminate(pid: int) -> None:
+    """结束进程：Windows 用 taskkill（连同子进程），其它平台发 SIGTERM。"""
+    if IS_WINDOWS:
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            capture_output=True,
+            check=False,
+        )
+        return
+    os.kill(pid, signal.SIGTERM)
+
+
 def _read_pid() -> int | None:
     try:
         pid = int(PID_FILE.read_text().strip())
     except (FileNotFoundError, ValueError):
         return None
-    try:
-        os.kill(pid, 0)
-    except OSError:
-        return None
-    return pid
+    return pid if _process_alive(pid) else None
 
 
 def _health(host: str, port: int, timeout: float = 1.5) -> bool:
@@ -104,20 +140,21 @@ def stop() -> int:
         print("没有在运行（或 PID 文件已失效）")
         return 0
     try:
-        os.kill(pid, signal.SIGTERM)
+        _terminate(pid)
     except OSError as exc:
         print(f"停止失败: {exc}", file=sys.stderr)
         return 1
     for _ in range(25):
         time.sleep(0.2)
-        try:
-            os.kill(pid, 0)
-        except OSError:
+        if not _process_alive(pid):
             PID_FILE.unlink(missing_ok=True)
             print(f"✔ 已停止（PID {pid}）")
             return 0
     print(f"进程 {pid} 没有在 5 秒内退出，尝试强制结束", file=sys.stderr)
-    os.kill(pid, signal.SIGKILL)
+    if IS_WINDOWS:
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, check=False)
+    else:
+        os.kill(pid, signal.SIGKILL)
     PID_FILE.unlink(missing_ok=True)
     return 0
 

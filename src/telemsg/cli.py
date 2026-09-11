@@ -188,6 +188,45 @@ def version() -> None:
     console.print(f"TeleMsgCreator [bold]{__version__}[/bold]")
 
 
+@app.command("doctor")
+def doctor(
+    offline: bool = typer.Option(False, "--offline", help="跳过联网检测"),
+    token: str | None = typer.Option(None, "--token"),
+    api_base: str | None = typer.Option(None, "--api-base"),
+    db: Path | None = typer.Option(None, "--db"),
+) -> None:
+    """环境自检：跑不起来时先执行这个。"""
+    from .doctor import run_checks, worst_exit_code
+
+    settings = _settings(token, api_base, db)
+    console.print(f"[bold]TeleMsgCreator {__version__} 环境自检[/bold]\n")
+    checks = run_checks(settings, online=not offline)
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("", width=3)
+    table.add_column("检查项", style="cyan")
+    table.add_column("结果")
+    for check in checks:
+        if check.ok:
+            mark = "[green]✔[/green]"
+        else:
+            mark = "[red]✖[/red]" if check.fatal else "[yellow]![/yellow]"
+        detail = check.detail
+        if check.hint and not check.ok:
+            detail += f"\n[dim]→ {check.hint}[/dim]"
+        table.add_row(mark, check.name, detail)
+    console.print(table)
+
+    failed = [c for c in checks if not c.ok]
+    if not failed:
+        console.print("[green]全部正常，可以开始使用。[/green]")
+        console.print("启动 Web 编辑器： [bold]telemsg serve --open[/bold]")
+    elif any(c.fatal for c in failed):
+        console.print(f"[red]有 {len(failed)} 项需要处理[/red]（上面标 ✖ 的是阻塞项）")
+    else:
+        console.print(f"[yellow]有 {len(failed)} 项提醒[/yellow]（标 ! 的不影响启动）")
+    raise typer.Exit(worst_exit_code(checks))
+
+
 @app.command("me")
 def me(
     token: str | None = typer.Option(None, "--token", help="Bot Token（默认读环境变量）"),
@@ -667,6 +706,7 @@ def history(
 def serve(
     host: str | None = typer.Option(None, "--host"),
     port: int | None = typer.Option(None, "--port"),
+    open_browser: bool = typer.Option(False, "--open", help="启动后自动打开浏览器（打包版默认带上）"),
     token: str | None = typer.Option(None, "--token"),
     api_base: str | None = typer.Option(None, "--api-base"),
     db: Path | None = typer.Option(None, "--db"),
@@ -682,9 +722,14 @@ def serve(
     from .web.app import create_app
 
     application = create_app(settings)
+    ui_host = host or settings.ui_host
+    ui_port = port or settings.ui_port
+    # 127.0.0.1 上打开的浏览器用 localhost，避免某些 Windows 环境回环解析异常
+    browse_host = "127.0.0.1" if ui_host in {"0.0.0.0", "::"} else ui_host
+    url = f"http://{browse_host}:{ui_port}"
     console.print(
         Panel.fit(
-            f"Web 编辑器： http://{host or settings.ui_host}:{port or settings.ui_port}\n"
+            f"Web 编辑器： {url}\n"
             f"数据库： {settings.db_path}\n"
             f"Token： {mask_token(settings.resolved_token)}"
             + ("\n[yellow]已开启基础认证（用户名 telemsg）[/yellow]" if settings.ui_password else ""),
@@ -692,10 +737,22 @@ def serve(
             border_style="cyan",
         )
     )
+    if open_browser:
+        import threading
+        import webbrowser
+
+        def _open() -> None:
+            try:
+                webbrowser.open(url, new=2)
+            except Exception:  # noqa: BLE001 - 打不开浏览器不该影响服务本身
+                console.print(f"[yellow]自动打开浏览器失败，请手动访问 {url}[/yellow]")
+
+        console.print(f"[dim]正在打开浏览器…若没有自动打开，请手动访问 {url}[/dim]")
+        threading.Timer(1.5, _open).start()
     uvicorn.run(
         application,
-        host=host or settings.ui_host,
-        port=port or settings.ui_port,
+        host=ui_host,
+        port=ui_port,
         reload=reload,
         log_level="debug" if verbose else "info",
     )
