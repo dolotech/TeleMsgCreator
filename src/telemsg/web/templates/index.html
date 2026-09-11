@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>TeleMsgCreator · 图文 + 按钮编辑器</title>
+  <link rel="stylesheet" href="/static/styles.css?v={{ version }}">
+  <script>
+    window.TELEMSG_LIMITS = {
+      text: {{ limits.text }},
+      caption: {{ limits.caption }},
+      groupMax: {{ limits.group_max }},
+      photoMb: {{ limits.photo_mb }}
+    };
+  </script>
+</head>
+<body>
+  <header>
+    <h1>TeleMsgCreator</h1>
+    <span class="badge">v{{ version }}</span>
+    {% if has_token %}
+      <span class="badge ok">Token 已配置 · {{ token_hint }}</span>
+    {% else %}
+      <span class="badge err">缺少 Bot Token（设置 TELEMSG_BOT_TOKEN）</span>
+    {% endif %}
+    <span class="spacer"></span>
+    <button class="ghost" id="checkBot">检查机器人连接</button>
+  </header>
+
+  <main>
+    <section>
+      <div class="card">
+        <h2>1 · 目标会话</h2>
+        <label for="chatId">发送到（@频道用户名 或 -100 开头的数字 ID）</label>
+        <input type="text" id="chatId" value="{{ default_chat }}" placeholder="@your_channel">
+        <div class="row">
+          <div>
+            <label for="threadId">论坛话题 ID（可选）</label>
+            <input type="text" id="threadId" placeholder="留空表示主频道">
+          </div>
+          <div>
+            <label for="parseMode">文本格式</label>
+            <select id="parseMode">
+              <option value="HTML" selected>HTML（推荐，支持 ** 语法自动转换）</option>
+              <option value="MarkdownV2">MarkdownV2</option>
+              <option value="">纯文本</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>2 · 图文内容</h2>
+        <label for="bodyText">正文（带图时自动作为图片说明 caption）</label>
+        <textarea id="bodyText" placeholder="**加粗**、__斜体__、`代码`、[链接](https://t.me/xxx)、||剧透||"></textarea>
+        <div class="counter" id="counter">0 / {{ limits.text }}</div>
+
+        <h3 class="mini">媒体（拖拽到这里，或点击选择）</h3>
+        <div class="dropzone" id="dropzone">
+          拖入图片 / 视频 / 文件，或点击选择<br>
+          <span class="muted">图片 ≤ {{ limits.photo_mb }} MB；放 2 张以上会自动变成相册（相册不支持按钮）</span>
+        </div>
+        <input type="file" id="fileInput" multiple hidden>
+        <ul class="media-list" id="mediaList"></ul>
+        <div class="muted" id="groupHint" style="margin-top:8px"></div>
+        <label for="mediaUrl">或直接粘贴图片 / 视频 URL、file_id</label>
+        <div class="row tight">
+          <input type="text" id="mediaUrl" placeholder="https://example.com/cover.jpg 或 AgACAgQAAxkBAA…">
+          <button id="addUrlBtn" style="flex:0 0 auto">添加</button>
+        </div>
+
+        <div class="row">
+          <div>
+            <label for="mediaKind">媒体类型</label>
+            <select id="mediaKind">
+              <option value="photo">图片</option>
+              <option value="video">视频</option>
+              <option value="animation">GIF</option>
+              <option value="document">文件</option>
+            </select>
+          </div>
+          <div style="display:flex;flex-direction:column;justify-content:flex-end">
+            <label class="checkline"><input type="checkbox" id="spoiler"> 图片打码（spoiler）</label>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>3 · 内联按钮</h2>
+        <div id="buttonRows"></div>
+        <div class="preset-list">
+          <button data-preset="buy">🛒 立即购买</button>
+          <button data-preset="support">💬 联系客服</button>
+          <button data-preset="copy">📋 复制邀请码</button>
+          <button data-preset="sub">🔔 订阅频道</button>
+        </div>
+        <p class="muted" style="font-size:12px;margin-top:10px">
+          URL 按钮任何人都能点；回调按钮需要你的机器人接收 callback_query 才有响应；
+          复制文本按钮不需要后端（Bot API 7.11+）。
+        </p>
+      </div>
+
+      <div class="card">
+        <h2>4 · 发送选项</h2>
+        <label class="checkline"><input type="checkbox" id="silent"> 静默发送（不推送通知）</label>
+        <label class="checkline"><input type="checkbox" id="protect"> 禁止转发与保存</label>
+        <label for="scheduleAt">定时发送（留空即立即发送）</label>
+        <input type="datetime-local" id="scheduleAt">
+        <label for="templateName">模板名称</label>
+        <div class="row tight">
+          <input type="text" id="templateName" placeholder="例如：新品上线">
+          <button id="saveTplBtn" style="flex:0 0 auto">保存模板</button>
+        </div>
+        <label for="templateSelect">载入模板</label>
+        <select id="templateSelect"></select>
+
+        <div class="actions">
+          <button class="primary" id="sendBtn">🚀 立即发送</button>
+          <button id="scheduleBtn">⏰ 加入定时</button>
+          <button id="dryRunBtn">🧾 查看 API 请求</button>
+        </div>
+        <div id="jsonBox" style="display:none">
+          <pre class="json" id="jsonOut"></pre>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="card preview-card">
+        <h2>实时预览（Telegram 观感）</h2>
+        <div class="preview-host" id="previewHost"></div>
+      </div>
+
+      <div class="card">
+        <h2>校验结果</h2>
+        <ul class="issues" id="issues"><li class="muted">正在校验…</li></ul>
+      </div>
+
+      <div class="card">
+        <h2>最近的发送</h2>
+        <ul class="issues" id="history"><li class="muted">加载中…</li></ul>
+      </div>
+
+      <div class="card">
+        <h2>计划任务</h2>
+        <ul class="issues" id="schedules"><li class="muted">加载中…</li></ul>
+        <p class="muted" style="font-size:12px">
+          定时任务需要守护进程：<code>telemsg run-scheduler</code>
+        </p>
+      </div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast"></div>
+  <script src="/static/app.js?v={{ version }}"></script>
+</body>
+</html>
