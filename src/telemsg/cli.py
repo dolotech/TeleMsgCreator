@@ -19,6 +19,7 @@ from rich.table import Table
 from . import __version__
 from .client import TelegramClient, mask_token
 from .config import Settings, get_settings
+from .diagnostics import explain
 from .errors import TelegramAPIError, TelemsgError
 from .logging_setup import setup_logging
 from .models import Draft, Keyboard, Media
@@ -39,10 +40,13 @@ app.add_typer(webhook_app, name="webhook")
 
 console = Console()
 err_console = Console(stderr=True, style="bold red")
+VERBOSE = False
 
 
 # ---------------------------------------------------------------- helpers
 def _setup_logging(level: str, verbose: bool) -> None:
+    global VERBOSE
+    VERBOSE = verbose
     handler = RichHandler(console=console, rich_tracebacks=True, show_path=verbose)
     logging.basicConfig(
         level=logging.DEBUG if verbose else getattr(logging, level.upper(), logging.INFO),
@@ -100,9 +104,9 @@ def _draft_from_options(
     chat: str | None,
     text: str | None,
     parse_mode: str | None,
-    photo: Path | None,
-    video: Path | None,
-    document: Path | None,
+    photo: str | None,
+    video: str | None,
+    document: str | None,
     caption: str | None,
     buttons: list[str],
     per_row: int,
@@ -119,7 +123,7 @@ def _draft_from_options(
     if media_path:
         media = Media(
             kind=kind or "photo",
-            source=str(media_path),
+            source=media_path,
             caption=caption or text,
             parse_mode=(parse_mode or "HTML") if (caption or text) else None,
             has_spoiler=spoil and kind == "photo",
@@ -158,15 +162,23 @@ def _load_draft(json_file: Path | None, template: str | None, settings: Settings
 def _print_report(report) -> None:
     if not report.issues:
         console.print("[green]✔ 校验通过，未发现问题[/green]")
-        return
-    table = Table(title="校验结果", show_lines=False, header_style="bold")
-    table.add_column("级别", width=8)
-    table.add_column("字段", style="cyan")
-    table.add_column("说明")
-    for issue in report.issues:
-        color = "red" if issue.severity.value == "error" else "yellow"
-        table.add_row(f"[{color}]{issue.severity.value}[/{color}]", issue.field, issue.message)
-    console.print(table)
+    else:
+        table = Table(title="校验结果", show_lines=False, header_style="bold")
+        table.add_column("级别", width=8)
+        table.add_column("字段", style="cyan")
+        table.add_column("说明")
+        table.add_column("建议")
+        for issue in report.issues:
+            color = "red" if issue.severity.value == "error" else "yellow"
+            table.add_row(
+                f"[{color}]{issue.severity.value}[/{color}]",
+                issue.field,
+                issue.message,
+                issue.hint or "",
+            )
+        console.print(table)
+    for note in getattr(report, "notes", []) or []:
+        console.print(f"[dim]ℹ {note}[/dim]")
 
 
 # ---------------------------------------------------------------- commands
@@ -274,9 +286,11 @@ def chats(
 def send(
     chat: str | None = typer.Option(None, "--chat", "-c", help="目标会话：@channel 或 -1001234567890"),
     text: str | None = typer.Option(None, "--text", "-t", help="正文；带图时自动作为 caption"),
-    photo: Path | None = typer.Option(None, "--photo", "-p", help="图片路径 / URL / file_id"),
-    video: Path | None = typer.Option(None, "--video", help="视频路径 / URL / file_id"),
-    document: Path | None = typer.Option(None, "--document", help="文件路径 / URL / file_id"),
+    # 注意：这里必须是 str 而不是 Path——Path("https://a/b.jpg") 会把 // 折叠成 /，
+    # 传 URL 时会被悄悄改坏，最后报「文件不存在」。
+    photo: str | None = typer.Option(None, "--photo", "-p", help="图片：本地路径 / 网络直链 / file_id"),
+    video: str | None = typer.Option(None, "--video", help="视频：本地路径 / 网络直链 / file_id"),
+    document: str | None = typer.Option(None, "--document", help="文件：本地路径 / 网络直链 / file_id"),
     caption: str | None = typer.Option(None, "--caption", help="与 --text 不同时使用"),
     button: list[str] = typer.Option(
         [],
@@ -343,6 +357,8 @@ def send(
                     border_style="green",
                 )
             )
+            for note in result.notes:
+                console.print(f"[dim]ℹ {note}[/dim]")
             if save_as:
                 service.save_template(save_as, draft)
                 console.print(f"[green]已保存模板：{save_as}[/green]")
@@ -351,10 +367,8 @@ def send(
         _run(run())
     except typer.Exit:
         raise
-    except TelegramAPIError as exc:
-        _fail(f"{exc.method} 调用失败：[{exc.error_code}] {exc.description}")
-    except TelemsgError as exc:
-        _fail(str(exc))
+    except (TelegramAPIError, TelemsgError) as exc:
+        _fail(explain(exc).text)
 
 
 @app.command("validate")
@@ -716,7 +730,20 @@ def main() -> None:  # pragma: no cover - 由 console_scripts 调用
     try:
         app()
     except TelemsgError as exc:
-        err_console.print(f"✖ {exc}")
+        err_console.print(f"✖ {explain(exc).text}")
+        sys.exit(1)
+    except KeyboardInterrupt:
+        console.print("\n已取消")
+        sys.exit(130)
+    except Exception as exc:  # noqa: BLE001 - 兜底，避免用户看到裸堆栈
+        diagnosis = explain(exc)
+        err_console.print(f"✖ {diagnosis.text}")
+        err_console.print(
+            f"[dim]未预期的 {type(exc).__name__}。"
+            "加上 --verbose 重新运行可以看到完整堆栈。[/dim]"
+        )
+        if VERBOSE:
+            console.print_exception()
         sys.exit(1)
 
 

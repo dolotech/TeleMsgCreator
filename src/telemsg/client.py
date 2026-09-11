@@ -20,6 +20,7 @@ import httpx
 
 from .config import DEFAULT_API_BASE, Settings, get_settings
 from .errors import ConfigError, TelegramAPIError, TransportError
+from .logging_setup import mask_token
 from .models import Draft, SendResult
 from .payload import RequestSpec, Upload, build_requests
 from .ratelimit import RateLimiter
@@ -28,14 +29,7 @@ log = logging.getLogger("telemsg.client")
 
 _MESSAGE_ID_KEYS = ("message_id",)
 
-
-def mask_token(token: str | None) -> str:
-    """日志/错误信息里用的脱敏 token。"""
-    if not token:
-        return "<未配置>"
-    if len(token) <= 10:
-        return "***"
-    return f"{token[:6]}...{token[-4:]}"
+__all__ = ["TelegramClient", "mask_token"]
 
 
 class TelegramClient:

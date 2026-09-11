@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -13,7 +14,12 @@ ParseMode = Literal["HTML", "MarkdownV2", "Markdown"]
 ButtonStyle = Literal["danger", "success", "primary"]
 MediaKind = Literal["photo", "video", "animation", "document", "audio"]
 
+#: Telegram 的 file_id 是 base64url 风格的长串，实测都在 40 字符以上，
+#: 且从不包含 ``.`` 或路径分隔符。阈值取 40 是为了不把「很长的无扩展名
+#: 文件名」误判成 file_id。
+_FILE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{40,}={0,2}$")
 _URL_SCHEME_RE = re.compile(r"^(https?|tg)://", re.IGNORECASE)
+SourceKind = Literal["url", "file_id", "local"]
 
 
 def _now() -> datetime:
@@ -256,21 +262,43 @@ class Media(BaseModel):
         return self.kind
 
     @property
+    def source_kind(self) -> SourceKind:
+        """判断 ``source`` 是网络地址、file_id，还是本地路径。
+
+        判定顺序刻意做成「显式优先」，避免难以解释的隐式行为：
+
+        1. 带 ``http(s)://`` / ``tg://`` 前缀 → 网络地址；
+        2. 磁盘上真实存在 → 本地文件；
+        3. 带路径分隔符、``~`` / ``.`` 前缀，或含扩展名 → 本地文件；
+        4. 剩下符合 file_id 特征的长串 → file_id；
+        5. 都不像 → 按本地路径处理，随后校验会明确报「文件不存在」，
+           比默默当成 file_id 再被 Telegram 拒绝更好排查。
+        """
+        source = self.source
+        if _URL_SCHEME_RE.match(source):
+            return "url"
+        if Path(source).expanduser().exists():
+            return "local"
+        looks_like_path = (
+            "/" in source or "\\" in source or source.startswith(("~", ".")) or "." in source
+        )
+        if looks_like_path:
+            return "local"
+        if _FILE_ID_RE.match(source):
+            return "file_id"
+        return "local"
+
+    @property
     def is_remote_url(self) -> bool:
-        return bool(re.match(r"^https?://", self.source, re.IGNORECASE))
+        return self.source_kind == "url"
 
     @property
     def is_local_file(self) -> bool:
-        if self.is_remote_url:
-            return False
-        if self.source.startswith("tg://") or re.match(r"^[A-Za-z0-9_-]{20,}$", self.source) and "/" not in self.source:
-            # 形如 file_id 的字符串（无路径分隔符且长度较大）
-            return False
-        return True
+        return self.source_kind == "local"
 
     @property
     def is_file_id(self) -> bool:
-        return not self.is_remote_url and not self.is_local_file
+        return self.source_kind == "file_id"
 
 
 class LinkPreviewOptions(BaseModel):
@@ -310,6 +338,9 @@ class Draft(BaseModel):
     schedule_at: datetime | None = None
     cron: str | None = None
 
+    #: 运行期标记：正文被自动挪到媒体 caption 时置真（不参与序列化）
+    caption_from_text: bool = Field(default=False, exclude=True)
+
     @field_validator("keyboard", mode="before")
     @classmethod
     def _coerce_keyboard(cls, v: Any) -> Any:
@@ -340,11 +371,13 @@ class Draft(BaseModel):
                 if self.media.parse_mode is None:
                     self.media.parse_mode = self.parse_mode or "HTML"
                 self.text = None
+                self.caption_from_text = True
             elif self.media_group and not self.media_group[0].caption:
                 self.media_group[0].caption = self.text
                 if self.media_group[0].parse_mode is None:
                     self.media_group[0].parse_mode = self.parse_mode or "HTML"
                 self.text = None
+                self.caption_from_text = True
         return self
 
     @property
@@ -393,6 +426,8 @@ class SendResult(BaseModel):
     sent_at: datetime = Field(default_factory=_now)
     error: str | None = None
     error_code: int | None = None
+    hint: str | None = None
+    notes: list[str] = Field(default_factory=list)
     raw: dict[str, Any] | None = None
 
     @classmethod

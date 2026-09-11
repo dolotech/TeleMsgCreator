@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from . import limits
+from .errors import MediaSourceError
 from .models import Draft, Media
 
 
@@ -174,11 +175,18 @@ def _resolve_media_source(media: Media, name: str, params: dict[str, Any], colle
         return _Resolved(ref=f"attach://{name}")
 
     if not path.is_file():
-        raise FileNotFoundError(f"媒体文件不存在: {path}")
+        raise MediaSourceError(
+            f"媒体文件不存在：{path}",
+            source=str(path),
+            hint="确认路径；引用网络图片请用完整 https:// 直链，或直接填 file_id",
+        )
     size = path.stat().st_size
     if size > limits.UPLOAD_MAX_BYTES:
-        raise ValueError(
-            f"{path.name} 有 {size / 1048576:.1f} MB，超过本工具上传上限 {limits.UPLOAD_MAX_BYTES // 1048576} MB"
+        raise MediaSourceError(
+            f"{path.name} 有 {size / 1048576:.1f} MB，超过本工具上传上限 "
+            f"{limits.UPLOAD_MAX_BYTES // 1048576} MB",
+            source=str(path),
+            hint="标准 Bot API 单文件上限 50MB；更大的文件需要自建 Bot API Server",
         )
     mime = media.mime_type or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     upload = Upload(name=name, filename=media.filename or path.name, content=path.read_bytes(), mime_type=mime)

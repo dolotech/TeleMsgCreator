@@ -14,6 +14,15 @@ class ConfigError(TelemsgError):
     """配置缺失或非法（例如没有提供 BOT TOKEN）。"""
 
 
+class MediaSourceError(TelemsgError):
+    """媒体来源不可用：路径不存在、文件过大、格式不支持等。"""
+
+    def __init__(self, message: str, *, source: str | None = None, hint: str | None = None) -> None:
+        super().__init__(message)
+        self.source = source
+        self.hint = hint
+
+
 class ValidationError(TelemsgError):
     """草稿未通过 Telegram 约束校验。"""
 

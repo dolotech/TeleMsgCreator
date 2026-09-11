@@ -33,6 +33,15 @@ def redact(text: str) -> str:
     return BARE_TOKEN_PATTERN.sub(BARE_PLACEHOLDER, text)
 
 
+def mask_token(token: str | None) -> str:
+    """给界面展示用的脱敏 token，例如 ``866796...oyo0``。"""
+    if not token:
+        return "<未配置>"
+    if len(token) <= 10:
+        return "***"
+    return f"{token[:6]}...{token[-4:]}"
+
+
 class RedactTokens(logging.Filter):
     """在日志真正落地前改写消息。"""
 

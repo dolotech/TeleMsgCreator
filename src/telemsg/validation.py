@@ -33,6 +33,7 @@ class Issue:
 @dataclass(slots=True)
 class Report:
     issues: list[Issue] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
 
     @property
     def errors(self) -> list[Issue]:
@@ -55,11 +56,17 @@ class Report:
     def warn(self, field_name: str, message: str, hint: str | None = None) -> None:
         self.add(Severity.WARNING, field_name, message, hint)
 
+    def note(self, message: str) -> None:
+        """中性说明：不是问题，但用户应该知道（例如正文被自动转成了 caption）。"""
+        if message not in self.notes:
+            self.notes.append(message)
+
     def as_dict(self) -> dict[str, object]:
         return {
             "ok": self.ok,
             "errors": [i.as_dict() for i in self.errors],
             "warnings": [i.as_dict() for i in self.warnings],
+            "notes": list(self.notes),
         }
 
     def raise_if_invalid(self) -> None:
@@ -78,9 +85,24 @@ def validate_draft(draft: Draft, *, check_files: bool = True) -> Report:
     _validate_text(draft, report)
     _validate_keyboard(draft, report)
     _validate_media_group(draft, report)
+    _explain_implicit_behaviour(draft, report)
     if check_files:
         _validate_local_files(draft, report)
     return report
+
+
+def _explain_implicit_behaviour(draft: Draft, report: Report) -> None:
+    """把模型里自动做的调整讲清楚，避免「我明明填了正文，怎么变成说明了」。"""
+    if draft.caption_from_text:
+        limit = limits.CAPTION_MAX
+        current = len(draft.effective_caption or "")
+        report.note(f"正文已作为媒体说明（caption）发送，当前 {current}/{limit} 字符")
+    if draft.is_media_group:
+        report.note("相册只有第一条能带说明文字，且相册不支持内联按钮")
+    for media in _all_media(draft):
+        if media.is_file_id:
+            report.note("检测到 file_id：会复用 Telegram 上已有的文件，不再重复上传")
+            break
 
 
 def _validate_text(draft: Draft, report: Report) -> None:
@@ -175,14 +197,19 @@ def _validate_local_files(draft: Draft, report: Report) -> None:
         path = Path(media.source).expanduser()
         field_name = f"media[{idx}].source"
         if not path.exists():
-            report.error(field_name, f"本地文件不存在: {path}")
+            report.error(
+                field_name,
+                f"本地文件不存在：{path}",
+                "确认路径无误；如果要引用网络图片请用完整的 https:// 直链，"
+                "也可以直接粘贴上一步上传后返回的 file_id",
+            )
             continue
         if not path.is_file():
-            report.error(field_name, f"路径不是文件: {path}")
+            report.error(field_name, f"这个路径不是文件：{path}", "请选择具体的文件而不是目录")
             continue
         size = path.stat().st_size
         if size == 0:
-            report.error(field_name, "文件为空")
+            report.error(field_name, "文件大小为 0", "重新导出或换一个文件")
             continue
         if media.kind == "photo":
             if size > limits.PHOTO_MAX_BYTES:

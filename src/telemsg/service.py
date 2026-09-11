@@ -11,7 +11,8 @@ from typing import Any
 
 from .client import TelegramClient
 from .config import Settings, get_settings
-from .errors import TelegramAPIError, TelemsgError
+from .diagnostics import explain
+from .errors import TelemsgError
 from .models import Draft, SendResult
 from .render import render_standalone_html
 from .store import Store
@@ -75,13 +76,23 @@ class PostService:
         is_dry = self.settings.dry_run if dry_run is None else dry_run
         if is_dry:
             spec = await self.client.dry_run(draft, chat_id=target)
-            return SendResult(ok=True, chat_id=target, method=spec["method"], raw={"dry_run": spec})
+            return SendResult(
+                ok=True,
+                chat_id=target,
+                method=spec["method"],
+                notes=report.notes,
+                raw={"dry_run": spec},
+            )
 
         try:
             result = await self.client.send_draft(draft, chat_id=target)
-        except (TelegramAPIError, TelemsgError) as exc:
-            self.store.record_send(SendResult.failure(exc, chat_id=target))
+        except Exception as exc:  # noqa: BLE001 - 任何失败都要留审计记录再抛出
+            failure = SendResult.failure(exc, chat_id=target)
+            failure.method = getattr(exc, "method", None)
+            failure.hint = explain(exc).hint
+            self.store.record_send(failure)
             raise
+        result.notes = report.notes
         self.store.record_send(result)
         return result
 
@@ -96,7 +107,6 @@ class PostService:
     ) -> list[SendResult]:
         """向多个会话发送同一内容，受速率限制保护。"""
         sem = asyncio.Semaphore(max(1, concurrency))
-        results: list[SendResult] = []
 
         async def one(chat: str | int) -> SendResult:
             async with sem:
@@ -108,11 +118,12 @@ class PostService:
                     log.error("向 %s 发送失败: %s", chat, exc)
                     if stop_on_error:
                         raise
-                    return SendResult.failure(exc, chat_id=chat)
+                    failure = SendResult.failure(exc, chat_id=chat)
+                    failure.hint = explain(exc).hint
+                    return failure
 
-        for coro in asyncio.as_completed([one(c) for c in chat_ids]):
-            results.append(await coro)
-        return results
+        # gather 保序，结果顺序与传入的 chat_ids 一致，方便对照阅读
+        return list(await asyncio.gather(*(one(chat) for chat in chat_ids)))
 
     # -- 模板 ----------------------------------------------------------
     def save_template(self, name: str, draft: Draft) -> str:
