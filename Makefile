@@ -1,7 +1,7 @@
 PY ?= .venv/bin/python
 PIP ?= $(PY) -m pip
 
-.PHONY: help install dev test test-live lint fmt preview serve dry-run scheduler docker clean
+.PHONY: help install dev test test-live lint fmt check ship preview serve dry-run scheduler docker clean
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -20,6 +20,12 @@ test-live: ## 用真实 Bot Token 跑联调测试（只读 + 可选发一条再�
 
 lint: ## 静态检查
 	$(PY) -m ruff check src tests
+
+check: ## 推送前的全套检查（工作区、敏感信息、lint、测试、远端同步）
+	scripts/ship.sh --dry-run
+
+ship: ## 规范化推送（检查全过才推）
+	scripts/ship.sh
 
 fmt: ## 自动格式化
 	$(PY) -m ruff check --fix src tests

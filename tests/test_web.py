@@ -162,7 +162,7 @@ def test_static_assets_served(client) -> None:
 
 
 # ------------------------------------------------------------------ 设置/引导
-NEW_TOKEN = "999888777:AANewTokenValueForTestsOnly1234567890"
+NEW_TOKEN = "999888777:AAHfakeNewTokenForTestsOnly_12345678"
 
 
 def test_read_settings_never_leaks_token(client) -> None:
@@ -206,7 +206,7 @@ def test_save_token_writes_env_and_applies_immediately(client, settings, monkeyp
     assert f"TELEMSG_BOT_TOKEN={NEW_TOKEN}" in env_text
     assert "TELEMSG_DEFAULT_CHAT_ID=@chan" in env_text
     # 立即生效，不需要重启
-    assert client.get("/api/settings").json()["settings"]["token_hint"] == "999888...7890"
+    assert client.get("/api/settings").json()["settings"]["token_hint"] == "999888...5678"
 
 
 def test_save_without_persist_keeps_disk_untouched(client, settings, monkeypatch) -> None:
