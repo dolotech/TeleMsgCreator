@@ -6,27 +6,22 @@
 
 from __future__ import annotations
 
-import importlib.util
+import platform
 import subprocess
-import sys
 import zipfile
 from pathlib import Path
 
 import pytest
+
+from telemsg import release
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture(scope="module")
 def builder():
-    spec = importlib.util.spec_from_file_location(
-        "build_release", ROOT / "scripts" / "build_release.py"
-    )
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    sys.modules["build_release"] = module
-    spec.loader.exec_module(module)
-    return module
+    """被测模块。保留这个 fixture 是为了让各用例显式表达「依赖打包器」。"""
+    return release
 
 
 # ------------------------------------------------------------------ _pth
@@ -215,3 +210,73 @@ def test_windows_package_ships_ascii_launchers(builder) -> None:
     non_ascii = [n for n in names if not n.isascii()]
     assert not non_ascii, f"Windows 包的模板文件名必须全是 ASCII：{non_ascii}"
     assert "start.bat" in names and "doctor.bat" in names
+
+
+# ------------------------------------------------------------ 项目根目录定位
+def test_find_project_root_locates_repo(builder) -> None:
+    root = builder.find_project_root()
+    assert (root / "pyproject.toml").is_file()
+    assert (root / "packaging" / "windows").is_dir()
+    assert root == ROOT
+
+
+def test_find_project_root_uses_env_override(builder, tmp_path: Path, monkeypatch) -> None:
+    fake = tmp_path / "src-tree"
+    (fake / "packaging").mkdir(parents=True)
+    monkeypatch.setenv("TELEMSG_SOURCE_ROOT", str(fake))
+    assert builder.find_project_root() == fake.resolve()
+
+
+def test_find_project_root_rejects_env_without_packaging(builder, tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("TELEMSG_SOURCE_ROOT", str(tmp_path))
+    with pytest.raises(builder.BuildError) as excinfo:
+        builder.find_project_root()
+    assert "packaging" in str(excinfo.value)
+
+
+def test_find_project_root_gives_readable_error(builder, tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("TELEMSG_SOURCE_ROOT", raising=False)
+    with pytest.raises(builder.BuildError) as excinfo:
+        builder.find_project_root(tmp_path / "nowhere")
+    message = str(excinfo.value)
+    assert "源码仓库" in message and "TELEMSG_SOURCE_ROOT" in message
+
+
+# ---------------------------------------------------------------- 目标解析
+def test_resolve_target_expands_current(builder) -> None:
+    assert builder.resolve_target("current") == (
+        "macos" if platform.system() == "Darwin" else "windows"
+    )
+    assert builder.resolve_target("all") == "all"
+    assert builder.resolve_target("windows") == "windows"
+
+
+# ------------------------------------------------------------------ 入口
+def test_legacy_script_is_a_thin_shim() -> None:
+    """旧文档与 CI 里写的 scripts/build_release.py 必须继续可用。"""
+    shim = ROOT / "scripts" / "build_release.py"
+    assert shim.is_file()
+    source = shim.read_text(encoding="utf-8")
+    assert "from telemsg.release import" in source
+    # 真正的实现只有一份，薄封装里不该再出现构建逻辑
+    assert "def build_windows" not in source
+    assert len(source.splitlines()) < 40, "薄封装不该重新长出实现"
+
+
+def test_build_targets_is_the_single_entry_for_both_cli_paths(builder) -> None:
+    import inspect
+
+    assert callable(builder.build_targets)
+    signature = inspect.signature(builder.build_targets)
+    for name in ("python_version", "out_dir", "make_zip", "include_pillow", "insecure"):
+        assert name in signature.parameters, f"build_targets 缺少参数 {name}"
+
+
+def test_cli_exposes_build_command() -> None:
+    from typer.testing import CliRunner
+
+    from telemsg.cli import app
+
+    result = CliRunner().invoke(app, ["build", "--help"])
+    assert result.exit_code == 0
+    assert "--target" in result.stdout

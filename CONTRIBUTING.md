@@ -1,5 +1,8 @@
 # 贡献与发布约定
 
+> 接手项目请先读 [维护者指南](docs/MAINTAINING.md)——里面有架构地图、
+> 测试策略、发布流程和关键设计决策。
+
 ## 提交信息
 
 采用 [Conventional Commits](https://www.conventionalcommits.org/)：

@@ -44,13 +44,13 @@ docker: ## 构建镜像
 	docker build -t telemsg:1.0.0 .
 
 package-win: ## 打包 Windows 绿色免安装版（可在 macOS 上直接执行）
-	$(PY) scripts/build_release.py --target windows
+	$(PY) -m telemsg build --target windows
 
 package-mac: ## 打包 macOS 版（需要 pyinstaller，且必须在 macOS 上执行）
-	$(PY) scripts/build_release.py --target macos
+	$(PY) -m telemsg build --target macos
 
 package: ## 打包当前系统可产出的全部目标
-	$(PY) scripts/build_release.py --target all
+	$(PY) -m telemsg build --target all
 
 clean: ## 清理本地缓存（保留 data/）
 	rm -rf .pytest_cache .ruff_cache **/__pycache__ build dist *.egg-info

@@ -7,6 +7,7 @@
 
 > 想知道市面上已经有哪些同类网站和机器人？见 [`docs/RESEARCH.md`](docs/RESEARCH.md)。
 > 被卡在「为什么不让我发」的时候，见 [`docs/TELEGRAM_LIMITS.md`](docs/TELEGRAM_LIMITS.md)。
+> 要接手维护这个项目？从 [`docs/MAINTAINING.md`](docs/MAINTAINING.md) 开始。
 
 ## 它解决什么问题
 
@@ -214,6 +215,8 @@ make package-win     # Windows 绿色版：在 macOS 上就能直接构建
 make package-mac     # macOS 版（需要 pyinstaller，且必须在 macOS 上构建）
 make package         # 两者都出
 ```
+
+也可以直接走 CLI：`telemsg build --target windows`。
 
 产物在 `dist/`。Windows 包拷过去解压，双击 `start.bat` 即用；
 跑不起来就双击 `doctor.bat` 看自检结果。

@@ -50,13 +50,17 @@ make package-mac
 make package
 ```
 
-等价的手工命令：
+等价的手工命令（三条入口完全等价，实现在 `src/telemsg/release.py`，只有一份）：
 
 ```bash
-python scripts/build_release.py --target windows
-python scripts/build_release.py --target windows --python-version 3.12.9   # 指定运行时版本
-python scripts/build_release.py --target windows --no-pillow               # 省几 MB
-python scripts/build_release.py --target windows --no-zip                  # 只留目录
+telemsg build --target windows                      # 推荐
+python -m telemsg.release --target windows
+python scripts/build_release.py --target windows    # 旧写法，薄封装
+
+# 常用开关
+telemsg build --target windows --python-version 3.12.9   # 指定运行时版本
+telemsg build --target windows --no-pillow               # 省几 MB
+telemsg build --target windows --no-zip                  # 只留目录
 ```
 
 产物在 `dist/`（已在 `.gitignore` 里）。

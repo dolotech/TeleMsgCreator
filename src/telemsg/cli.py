@@ -833,6 +833,53 @@ def _remove_port_file(path: Path) -> None:
         pass
 
 
+@app.command("build")
+def build(
+    target: str = typer.Option(
+        "current",
+        "--target",
+        "-t",
+        help="windows / macos / all / current（默认按当前系统推断）",
+    ),
+    python_version: str | None = typer.Option(
+        None, "--python-version", help="Windows embeddable 运行时版本，默认自动挑选"
+    ),
+    out: Path | None = typer.Option(None, "--out", "-o", help="产物目录（默认 dist/）"),
+    no_zip: bool = typer.Option(False, "--no-zip", help="只留目录，不压 zip"),
+    no_pillow: bool = typer.Option(False, "--no-pillow", help="不打包 Pillow（省空间，放弃图片尺寸校验）"),
+    insecure: bool = typer.Option(
+        False, "--insecure", help="跳过 TLS 校验（公司中间人代理场景，谨慎使用）"
+    ),
+) -> None:
+    """打包发行版：目标机器无需安装 Python。
+
+    Windows 包可以在 macOS / Linux 上构建（官方 embeddable 运行时 + 交叉下载
+    Windows wheel，全程不编译）；macOS 包必须在 macOS 上构建。
+    """
+    if target not in {"windows", "macos", "all", "current"}:
+        _fail(f"未知目标 {target!r}，可选：windows / macos / all / current")
+    try:
+        from . import release
+    except Exception as exc:  # noqa: BLE001 - 非源码树运行时给出可读原因
+        _fail(str(exc))
+    release.describe_build_environment(target)
+    try:
+        release.build_targets(
+            target,
+            python_version=python_version,
+            out_dir=out or release.DIST,
+            make_zip=not no_zip,
+            include_pillow=not no_pillow,
+            insecure=insecure,
+        )
+    except release.BuildError as exc:
+        err_console.print(f"✖ 打包失败\n{exc}")
+        raise typer.Exit(1) from exc
+    console.print("\n[bold green]打包完成[/bold green]")
+    for item in sorted((out or release.DIST).glob("*.zip")):
+        console.print(f"  {item}  （{item.stat().st_size / 1048576:.1f} MB）")
+
+
 @app.command("schema")
 def schema() -> None:
     """打印草稿 JSON Schema（方便写模板/外部程序对接）。"""
