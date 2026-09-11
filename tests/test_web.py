@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -87,7 +90,11 @@ def test_send_reports_api_error(client, settings, monkeypatch) -> None:
     monkeypatch.setattr(httpx, "AsyncClient", _make_client_class(handler))
     response = client.post("/api/send", json={"draft": DRAFT})
     assert response.status_code == 400
-    assert "chat not found" in response.json()["error"]
+    body = response.json()
+    # 面向使用者的中文诊断 + 可执行建议，而不是 Telegram 的英文原文
+    assert body["error"] == "找不到目标会话"
+    assert body["hint"] and "频道" in body["hint"]
+    assert "chat not found" in (body["raw"] or "")
 
 
 def test_send_success(client, monkeypatch) -> None:
@@ -152,3 +159,78 @@ def test_basic_auth_enforced(settings) -> None:
 def test_static_assets_served(client) -> None:
     assert client.get("/static/app.js").status_code == 200
     assert client.get("/static/styles.css").status_code == 200
+
+
+# ------------------------------------------------------------------ 设置/引导
+NEW_TOKEN = "999888777:AANewTokenValueForTestsOnly1234567890"
+
+
+def test_read_settings_never_leaks_token(client) -> None:
+    body = client.get("/api/settings").json()
+    assert body["ok"] is True
+    assert body["settings"]["has_token"] is True
+    assert body["settings"]["token_hint"] == "123456...OKEN"
+    assert "TEST_TOKEN" not in json.dumps(body, ensure_ascii=False)
+
+
+def test_save_token_rejects_invalid_token(client, settings, monkeypatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"ok": False, "error_code": 401, "description": "Unauthorized"})
+
+    monkeypatch.setattr(httpx, "AsyncClient", _make_client_class(handler))
+    response = client.post("/api/settings", json={"bot_token": NEW_TOKEN})
+    assert response.status_code == 400
+    body = response.json()
+    assert body["ok"] is False
+    assert "Token" in body["error"]
+    assert body["hint"]
+    # 验证失败就不该落盘
+    assert not Path(settings.env_file).exists()
+
+
+def test_save_token_writes_env_and_applies_immediately(client, settings, monkeypatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"ok": True, "result": {"id": 42, "is_bot": True, "username": "MyBot", "first_name": "My"}},
+        )
+
+    monkeypatch.setattr(httpx, "AsyncClient", _make_client_class(handler))
+    response = client.post("/api/settings", json={"bot_token": NEW_TOKEN, "default_chat_id": "@chan"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["bot"]["username"] == "MyBot"
+    assert body["settings"]["saved_to"] == str(settings.env_file)
+
+    env_text = Path(settings.env_file).read_text(encoding="utf-8")
+    assert f"TELEMSG_BOT_TOKEN={NEW_TOKEN}" in env_text
+    assert "TELEMSG_DEFAULT_CHAT_ID=@chan" in env_text
+    # 立即生效，不需要重启
+    assert client.get("/api/settings").json()["settings"]["token_hint"] == "999888...7890"
+
+
+def test_save_without_persist_keeps_disk_untouched(client, settings, monkeypatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True, "result": {"id": 1, "is_bot": True, "username": "B"}})
+
+    monkeypatch.setattr(httpx, "AsyncClient", _make_client_class(handler))
+    body = client.post("/api/settings", json={"bot_token": NEW_TOKEN, "persist": False}).json()
+    assert body["ok"] is True
+    assert body["settings"]["saved_to"] is None
+    assert not Path(settings.env_file).exists()
+
+
+def test_me_returns_readable_diagnosis_when_token_missing(settings) -> None:
+    settings = settings.model_copy(update={"bot_token": None})
+    bare = TestClient(create_app(settings))
+    response = bare.get("/api/me")
+    assert response.status_code == 400
+    body = response.json()
+    assert body["ok"] is False
+    assert body["action"] == "open_settings"
+
+
+def test_index_exposes_bootstrap_flags(settings) -> None:
+    page = TestClient(create_app(settings)).get("/")
+    assert "TELEMSG_BOOT" in page.text
+    assert "hasToken: true" in page.text

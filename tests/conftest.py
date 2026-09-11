@@ -18,6 +18,8 @@ def settings(tmp_path: Path) -> Settings:
         bot_token="123456:TEST_TOKEN",
         db_path=tmp_path / "telemsg.sqlite3",
         upload_dir=tmp_path / "uploads",
+        # 关键：测试绝不能写到仓库根目录的真实 .env
+        env_file=tmp_path / ".env",
         max_retries=1,
         timeout_seconds=5.0,
     )

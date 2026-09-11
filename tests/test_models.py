@@ -94,3 +94,40 @@ def test_draft_json_roundtrip() -> None:
     restored = Draft.from_json(draft.to_json())
     assert restored.chat_id == "@c"
     assert restored.keyboard.rows[0][0].url == "https://a.com"
+
+
+def test_media_source_kind_detection(tmp_path) -> None:
+    local = tmp_path / "cover.jpg"
+    local.write_bytes(b"x")
+    assert Media(kind="photo", source=str(local)).source_kind == "local"
+    assert Media(kind="photo", source="cover.jpg").source_kind == "local"
+    assert Media(kind="photo", source="./pic.png").source_kind == "local"
+    assert Media(kind="photo", source="~/pic.png").source_kind == "local"
+    assert Media(kind="photo", source="https://a/b.jpg").source_kind == "url"
+    assert Media(kind="photo", source="tg://resolve?domain=x").source_kind == "url"
+    realistic_file_id = "AgACAgQAAxkBAAIC4mXkZ1234567890abcdefghijklmnopqrstuv"
+    assert len(realistic_file_id) >= 40
+    assert Media(kind="photo", source=realistic_file_id).source_kind == "file_id"
+
+
+def test_long_filename_without_extension_is_not_a_file_id() -> None:
+    """回归：以前会把 20+ 字符的无扩展名文件名误判成 file_id。"""
+    media = Media(kind="photo", source="mysecretfilewithoutanyextension")
+    assert media.is_file_id is False
+    assert media.is_local_file is True
+
+
+def test_draft_marks_when_text_becomes_caption() -> None:
+    draft = Draft(
+        chat_id="@c",
+        text="标题",
+        media=Media(kind="photo", source="https://a/1.jpg"),
+    )
+    assert draft.caption_from_text is True
+    # 该标记是运行期元数据，不该被序列化出去
+    assert "caption_from_text" not in draft.to_json()
+
+
+def test_draft_without_conversion_has_no_flag() -> None:
+    draft = Draft(chat_id="@c", text="纯文本")
+    assert draft.caption_from_text is False

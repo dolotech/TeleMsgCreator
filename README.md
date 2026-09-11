@@ -58,6 +58,9 @@ python scripts/serverctl.py stop      # 停止
 
 `telemsg serve` 之后打开 `http://127.0.0.1:8765`：
 
+**第一次打开会弹出引导**：填 Bot Token → 自动调 `getMe` 验证 →（可选）填默认频道 → 开始编辑。
+验证通过才会写入配置文件，填错了会当场告诉你错在哪、怎么改。之后随时可以点右上角「⚙ 设置」重新打开。
+
 * 左侧填目标会话、正文，拖入图片 / 视频；
 * 按钮按「行」编排，每行可以放多个，逐个选择动作类型与配色；
 * 右侧是实时预览——就是你手机里会长成的样子；
@@ -65,6 +68,20 @@ python scripts/serverctl.py stop      # 停止
 * 「立即发送」「加入定时」「保存模板」「查看 API 请求」各司其职。
 
 给公网访问时务必设 `TELEMSG_UI_PASSWORD`（用户名固定为 `telemsg`）。
+
+### 引导里都能填什么
+
+| 项 | 说明 |
+| --- | --- |
+| Bot Token | 必填。会先调 `getMe` 验证，失败会给出中文原因（无效 / 被吊销 / 网络不通） |
+| 默认目标频道 | 可选。填了会顺手 `getChat` 探一下能不能访问；访问不到只是提醒，不会阻止保存 |
+| API 地址 | 可选。自建 Bot API Server 时改这里，留空即官方接口 |
+
+保存会写入 `.env`（写之前是「临时文件 + 原子替换」，并强制 `0600` 权限，因为这是等同于密码的东西）。
+也可以在弹窗里选择只让配置在本次运行内生效、不落盘。
+
+> ⚠️ 如果启动服务时 shell 里已经有 `TELEMSG_BOT_TOKEN` 环境变量，它的优先级**高于** `.env`。
+> 引导里检测到这种情况会明确提示，避免你改了 `.env` 却发现重启后没生效。
 
 ## 命令行
 
@@ -218,6 +235,23 @@ TELEMSG_LIVE_TEST=1 TELEMSG_TEST_CHAT=@my_test_channel make test-live
 * 本项目已 `.gitignore` 掉 `.env`；日志层另有脱敏过滤器（[`logging_setup.py`](src/telemsg/logging_setup.py)），会把 `bot<数字>:<token>` 统一替换成 `bot<TOKEN>`，且默认不再打印 httpx 的请求 URL。
 * 如果 token 曾经外泄，去 [@BotFather](https://t.me/BotFather) 用 `/revoke` 换一个，再更新 `.env`。
 * 若机器人已经挂着 webhook（`telemsg webhook info` 可查），说明有别的服务在接管它的更新。删 webhook 前务必确认，否则那个服务会直接失效。
+
+## 出错时会看到什么
+
+Telegram 的原始报错是英文且面向开发者，本项目统一翻译成「问题 + 怎么办」
+（[`diagnostics.py`](src/telemsg/diagnostics.py)，CLI 与 Web 共用同一份文案）：
+
+| Telegram 原文 | 你会看到 |
+| --- | --- |
+| `Bad Request: chat not found` | 找不到目标会话 👉 确认 `@用户名` 拼写、私有频道用 `-100` 数字 ID、机器人必须已进频道 |
+| `Forbidden: bot is not a member` | 机器人不在这个会话里，或已被移出 👉 重新拉进频道并给发帖权限 |
+| `Bad Request: not enough rights` | 机器人在该频道没有发帖权限 👉 频道 → 管理员 → 勾选「发布消息」 |
+| `Bad Request: message caption is too long` | 图片说明超过 1024 字符 👉 长文拆成独立的一条消息 |
+| `Bad Request: BUTTON_DATA_INVALID` | 按钮回调数据（callback_data）不合法 👉 上限 64 字节，一个汉字算 3 字节 |
+| `Too Many Requests: retry after N` | 发送太快被限流 👉 工具已按 retry_after 自动退避 |
+| `Unauthorized` | Bot Token 无效或已被吊销 👉 去 @BotFather 重新获取 |
+
+原始报错不会丢，会附在末尾（`原文：[401] Unauthorized`），方便对照官方文档排查。
 
 ## 已知限制
 

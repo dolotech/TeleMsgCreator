@@ -43,9 +43,10 @@ def test_local_photo_becomes_attachment(tmp_path: Path, png_bytes: bytes) -> Non
 
 
 def test_file_id_source_is_passed_through() -> None:
-    draft = Draft(chat_id="@c", media=Media(kind="photo", source="AgACAgQAAxkBAAIC4mXkZ1234567890abcdef"))
+    file_id = "AgACAgQAAxkBAAIC4mXkZ1234567890abcdefghijklmnopqrstuv"
+    draft = Draft(chat_id="@c", media=Media(kind="photo", source=file_id))
     spec = build_requests(draft)[0]
-    assert spec.params["photo"] == "AgACAgQAAxkBAAIC4mXkZ1234567890abcdef"
+    assert spec.params["photo"] == file_id
     assert not spec.has_uploads
 
 
