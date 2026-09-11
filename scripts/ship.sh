@@ -60,7 +60,11 @@ LEAK_RE='[0-9]{6,10}:[A-Za-z0-9_-]{30,}'
 # 允许的占位写法（示例、测试假值）
 PLACEHOLDER_RE='(Example|example|EXAMPLE|fake|FAKE|Fake|xxxx|XXX|redacted|REDACTED|YOUR|your_)'
 
-LEAKS=$(git grep -I -nE "$LEAK_RE" -- . ':!*.example' 2>/dev/null | grep -vE "$PLACEHOLDER_RE" || true)
+# 排除本脚本自身：下面这些模式字面量就写在它里面，否则会扫到自己
+SELF_EXCLUDE=':!scripts/ship.sh'
+
+LEAKS=$(git grep -I -nE "$LEAK_RE" -- . ':!*.example' "$SELF_EXCLUDE" 2>/dev/null \
+  | grep -vE "$PLACEHOLDER_RE" || true)
 if [ -n "$LEAKS" ]; then
   printf '%s\n' "$LEAKS" | head -10
   die "疑似把真实凭证写进了代码。若确为示例值，请改写成含 xxx / Example 的占位形式"
@@ -70,15 +74,15 @@ ok "没有发现疑似真实凭证"
 # 与本机 .env 里的真实 token 精确比对
 if [ -f .env ]; then
   REAL_TOKEN=$(grep -E '^TELEMSG_BOT_TOKEN=' .env | head -1 | cut -d= -f2- || true)
-  if [ -n "${REAL_TOKEN:-}" ] && git grep -qF "$REAL_TOKEN" -- . >/dev/null 2>&1; then
-    git grep -nF "$REAL_TOKEN" -- .
+  if [ -n "${REAL_TOKEN:-}" ] && git grep -qF "$REAL_TOKEN" -- . "$SELF_EXCLUDE" >/dev/null 2>&1; then
+    git grep -nF "$REAL_TOKEN" -- . "$SELF_EXCLUDE"
     die "检测到 .env 中的真实 Bot Token 已存在于被跟踪文件里"
   fi
   [ -n "${REAL_TOKEN:-}" ] && ok ".env 中的 token 未出现在任何被跟踪文件里"
 fi
 
 for pattern in 'PRIVATE KEY' 'ssh-rsa AAAA'; do
-  if git grep -qI -F "$pattern" -- . 2>/dev/null; then
+  if git grep -qI -F "$pattern" -- . "$SELF_EXCLUDE" 2>/dev/null; then
     die "检测到疑似私钥内容（$pattern）"
   fi
 done
