@@ -12,6 +12,13 @@
       groupMax: {{ limits.group_max }},
       photoMb: {{ limits.photo_mb }}
     };
+    window.TELEMSG_BOOT = {
+      hasToken: {{ 'true' if has_token else 'false' }},
+      tokenHint: {{ token_hint | tojson }},
+      defaultChat: {{ default_chat | tojson }},
+      envFile: {{ env_file | tojson }},
+      allowEnvWrite: {{ 'true' if allow_env_write else 'false' }}
+    };
   </script>
 </head>
 <body>
@@ -21,9 +28,10 @@
     {% if has_token %}
       <span class="badge ok">Token 已配置 · {{ token_hint }}</span>
     {% else %}
-      <span class="badge err">缺少 Bot Token（设置 TELEMSG_BOT_TOKEN）</span>
+      <span class="badge err">缺少 Bot Token（点右上角「设置」）</span>
     {% endif %}
     <span class="spacer"></span>
+    <button class="ghost" id="openSettings">⚙ 设置</button>
     <button class="ghost" id="checkBot">检查机器人连接</button>
   </header>
 
@@ -33,6 +41,10 @@
         <h2>1 · 目标会话</h2>
         <label for="chatId">发送到（@频道用户名 或 -100 开头的数字 ID）</label>
         <input type="text" id="chatId" value="{{ default_chat }}" placeholder="@your_channel">
+        <div class="hint">
+          公开频道填 <code>@username</code>；私有频道填 <code>-100…</code> 的数字 ID。
+          <strong>机器人必须是该频道的管理员，且有「发布消息」权限</strong>，否则会报 chat not found。
+        </div>
         <div class="row">
           <div>
             <label for="threadId">论坛话题 ID（可选）</label>
@@ -45,6 +57,7 @@
               <option value="MarkdownV2">MarkdownV2</option>
               <option value="">纯文本</option>
             </select>
+            <div class="hint">拿不准就用 HTML 或纯文本，MarkdownV2 对转义最挑剔。</div>
           </div>
         </div>
       </div>
@@ -54,6 +67,10 @@
         <label for="bodyText">正文（带图时自动作为图片说明 caption）</label>
         <textarea id="bodyText" placeholder="**加粗**、__斜体__、`代码`、[链接](https://t.me/xxx)、||剧透||"></textarea>
         <div class="counter" id="counter">0 / {{ limits.text }}</div>
+        <div class="hint">
+          注意上限：纯文本消息 {{ limits.text }} 字符，带图时属于 caption、上限只有 {{ limits.caption }} 字符。
+          超了会直接发送失败，记得看右下角的计数器。
+        </div>
 
         <h3 class="mini">媒体（拖拽到这里，或点击选择）</h3>
         <div class="dropzone" id="dropzone">
@@ -67,6 +84,9 @@
         <div class="row tight">
           <input type="text" id="mediaUrl" placeholder="https://example.com/cover.jpg 或 AgACAgQAAxkBAA…">
           <button id="addUrlBtn" style="flex:0 0 auto">添加</button>
+        </div>
+        <div class="hint">
+          URL 必须是可公开访问的直链；file_id 只能复用同一个机器人上传过的文件（换过 token 就失效）。
         </div>
 
         <div class="row">
@@ -106,6 +126,9 @@
         <label class="checkline"><input type="checkbox" id="protect"> 禁止转发与保存</label>
         <label for="scheduleAt">定时发送（留空即立即发送）</label>
         <input type="datetime-local" id="scheduleAt">
+        <div class="hint">
+          按你电脑的本地时区填写。定时任务需要后台守护进程 <code>telemsg run-scheduler</code> 在运行才会真正发出。
+        </div>
         <label for="templateName">模板名称</label>
         <div class="row tight">
           <input type="text" id="templateName" placeholder="例如：新品上线">
@@ -148,10 +171,104 @@
           定时任务需要守护进程：<code>telemsg run-scheduler</code>
         </p>
       </div>
+
+      <div class="card">
+        <h2>遇到问题？</h2>
+        <details class="help">
+          <summary>报 “chat not found” / 找不到会话</summary>
+          <p>八成是机器人还没进频道。打开频道 → 管理 → 管理员 → 添加你刚才创建的机器人 → 勾选「发布消息」。
+          私有频道请改用 <code>-100</code> 开头的数字 ID。</p>
+        </details>
+        <details class="help">
+          <summary>报 “not enough rights” / 没有权限</summary>
+          <p>机器人已经是成员但没有发帖权限。回到管理员设置，确认勾选了「发布消息」。</p>
+        </details>
+        <details class="help">
+          <summary>按钮点了没反应</summary>
+          <p>只有「跳转链接」和「复制文本」按钮不需要后端。回调（callback_data）按钮需要你的机器人程序
+          接收 callback_query；本工具只负责发送，不处理点击。</p>
+        </details>
+        <details class="help">
+          <summary>图片发不出去</summary>
+          <p>图片需 ≤ {{ limits.photo_mb }} MB，宽 + 高 ≤ 10000 像素，长宽比 ≤ 20:1。
+          网络图片必须是直链，不能是网页地址。</p>
+        </details>
+        <details class="help">
+          <summary>相册为什么不能加按钮</summary>
+          <p>这是 Telegram 的限制，不是本工具的问题：album 一律不支持 inline keyboard。
+          想两者兼得，可以发相册后再补一条带按钮的消息。</p>
+        </details>
+      </div>
     </section>
   </main>
 
   <div class="toast" id="toast"></div>
+  <div class="modal" id="setupModal" hidden>
+    <div class="modal-box">
+      <div class="modal-head">
+        <h2 id="setupTitle">开始使用 TeleMsgCreator</h2>
+        <button class="icon ghost" id="setupClose" title="关闭">✕</button>
+      </div>
+      <ol class="steps" id="setupSteps">
+        <li data-step="1" class="active">获取 Token</li>
+        <li data-step="2">验证</li>
+        <li data-step="3">目标频道</li>
+        <li data-step="4">完成</li>
+      </ol>
+
+      <section class="step-body" data-step="1">
+        <p class="lead">先准备一个属于你的机器人。整个过程大约 30 秒：</p>
+        <ol class="guide">
+          <li>在 Telegram 里打开 <a href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a>，发送 <code>/newbot</code></li>
+          <li>给它起个名字和用户名（用户名必须以 <code>bot</code> 结尾）</li>
+          <li>BotFather 会回一段形如 <code>123456789:AAH…</code> 的 Token，复制它</li>
+        </ol>
+        <label for="setupToken">Bot Token</label>
+        <input type="text" id="setupToken" placeholder="123456789:AAH…" autocomplete="off" spellcheck="false">
+        <div class="hint">
+          Token 等同于这个机器人的账号密码，别贴到公开地方。
+          保存时会先调用 getMe 验证，验证通过才写入配置文件。
+        </div>
+        <div class="result-box bad" id="setupError" hidden></div>
+        <div class="modal-actions">
+          <span class="muted" id="setupStep1Msg"></span>
+          <button class="primary" id="setupNext1">验证并继续</button>
+        </div>
+      </section>
+
+      <section class="step-body" data-step="2" hidden>
+        <div id="setupBotInfo" class="result-box"></div>
+        <div class="hint">接下来决定要不要现在填默认频道。</div>
+        <div class="modal-actions">
+          <button class="ghost" id="setupBack2">返回上一步</button>
+          <button class="primary" id="setupNext2">下一步</button>
+        </div>
+      </section>
+
+      <section class="step-body" data-step="3" hidden>
+        <p class="lead">你要发到哪个频道？现在填可以省事，也可以稍后再填。</p>
+        <label for="setupChat">默认目标（可留空）</label>
+        <input type="text" id="setupChat" placeholder="@my_channel 或 -1001234567890">
+        <div class="hint">
+          还没把机器人拉进频道也没关系，先保存，之后再加管理员。
+          添加路径：频道 → 管理 → 管理员 → 添加机器人 → 勾选「发布消息」。
+        </div>
+        <div class="modal-actions">
+          <button class="ghost" id="setupSkipChat">跳过</button>
+          <button class="primary" id="setupSaveChat">保存并完成</button>
+        </div>
+      </section>
+
+      <section class="step-body" data-step="4" hidden>
+        <div id="setupDone" class="result-box"></div>
+        <p class="lead">接下来：左侧写正文 → 拖入图片 → 排按钮 → 右侧实时预览 → 点「立即发送」。</p>
+        <div class="modal-actions">
+          <button class="primary" id="setupFinish">开始编辑</button>
+        </div>
+      </section>
+    </div>
+  </div>
+
   <script src="/static/app.js?v={{ version }}"></script>
 </body>
 </html>

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import mimetypes
+import os
 import secrets
 import uuid
 from datetime import datetime, timezone
@@ -20,7 +21,8 @@ from pydantic import ValidationError as PydanticValidationError
 
 from .. import __version__, limits
 from ..client import TelegramClient, mask_token
-from ..config import Settings, get_settings
+from ..config import DEFAULT_API_BASE, Settings, get_settings, update_env_file
+from ..diagnostics import explain
 from ..errors import ConfigError, TelegramAPIError, TelemsgError
 from ..logging_setup import install_token_redaction
 from ..models import Draft
@@ -72,6 +74,16 @@ class ScheduleRequest(BaseModel):
 class TemplateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     draft: dict[str, Any]
+
+
+class SettingsRequest(BaseModel):
+    """界面上的「设置」表单。只提交需要改动的项。"""
+
+    bot_token: str | None = None
+    default_chat_id: str | None = None
+    api_base: str | None = None
+    persist: bool = True
+    clear_token: bool = False
 
 
 EMPTY_BUBBLE = (
@@ -165,6 +177,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "default_chat": settings.default_chat_id or "",
                 "has_token": bool(settings.resolved_token),
                 "token_hint": mask_token(settings.resolved_token),
+                "env_file": str(settings.env_file),
+                "allow_env_write": settings.allow_env_write,
                 "limits": {
                     "text": limits.MESSAGE_TEXT_MAX,
                     "caption": limits.CAPTION_MAX,
@@ -178,21 +192,128 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def health() -> dict[str, Any]:
         return {"ok": True, "version": __version__, "has_token": bool(settings.resolved_token)}
 
+    # ------------------------------------------------------ settings/引导
+    @application.get("/api/settings", dependencies=[auth])
+    async def read_settings() -> dict[str, Any]:
+        return {"ok": True, "settings": settings.public_view()}
+
+    @application.post("/api/settings", dependencies=[auth])
+    async def write_settings(payload: SettingsRequest) -> JSONResponse:
+        """保存 Bot Token 等配置。
+
+        流程刻意做成「先验证、后写入」：token 只有真的能通过 getMe 才落盘，
+        否则用户会在几小时后才发现自己填错了。
+        """
+        nonlocal settings
+        token = payload.bot_token.strip() if payload.bot_token else None
+        warnings: list[str] = []
+        bot: dict[str, Any] | None = None
+        chat_check: dict[str, Any] | None = None
+
+        if token:
+            probe = settings.model_copy(update={"bot_token": token})
+            try:
+                async with TelegramClient(settings=probe, max_retries=0) as client:
+                    bot = await client.get_me()
+            except Exception as exc:  # noqa: BLE001 - 一切失败都翻译成可读原因
+                diagnosis = explain(exc)
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "ok": False,
+                        "error": diagnosis.message,
+                        "hint": diagnosis.hint,
+                        "raw": diagnosis.raw,
+                    },
+                )
+
+        target = (payload.default_chat_id or "").strip() or None
+        if target and not token and settings.resolved_token:
+            # 用现有 token 顺手确认一下这个频道机器人可否访问
+            try:
+                async with TelegramClient(settings=settings, max_retries=0) as client:
+                    chat = await client.get_chat(target)
+                chat_check = {
+                    "ok": True,
+                    "title": chat.get("title") or chat.get("username") or str(chat.get("id")),
+                    "type": chat.get("type"),
+                }
+            except Exception as exc:  # noqa: BLE001 - 校验失败不影响保存
+                diagnosis = explain(exc)
+                chat_check = {"ok": False, "error": diagnosis.message, "hint": diagnosis.hint}
+                warnings.append(
+                    f"默认目标「{target}」暂时访问不到：{diagnosis.message}。"
+                    "已保存，但发送前请确认机器人已被拉进该频道。"
+                )
+
+        updates: dict[str, Any] = {}
+        if payload.clear_token:
+            updates["bot_token"] = None
+        elif token:
+            updates["bot_token"] = token
+        if payload.default_chat_id is not None:
+            updates["default_chat_id"] = target or None
+        if payload.api_base is not None:
+            updates["api_base"] = (payload.api_base.strip() or DEFAULT_API_BASE)
+
+        if updates:
+            settings = settings.model_copy(update=updates)
+
+        saved_to: str | None = None
+        if payload.persist and updates and settings.allow_env_write:
+            env_updates: dict[str, str | None] = {}
+            if "bot_token" in updates:
+                env_updates["TELEMSG_BOT_TOKEN"] = updates["bot_token"]
+                env_updates["TELEGRAM_BOT_TOKEN"] = None
+            if "default_chat_id" in updates:
+                env_updates["TELEMSG_DEFAULT_CHAT_ID"] = updates["default_chat_id"]
+            if "api_base" in updates:
+                env_updates["TELEMSG_API_BASE"] = updates["api_base"]
+            try:
+                saved_to = str(update_env_file(env_updates, path=Path(settings.env_file)))
+            except OSError as exc:
+                warnings.append(f"写 .env 失败（{exc}），配置只在本次运行内生效")
+        elif payload.persist and not settings.allow_env_write:
+            warnings.append("服务端已禁用写 .env（TELEMSG_ALLOW_ENV_WRITE=0），配置只在本次运行内生效")
+
+        if token and os.environ.get("TELEMSG_BOT_TOKEN"):
+            warnings.append(
+                "检测到环境变量 TELEMSG_BOT_TOKEN，它的优先级高于 .env；"
+                "重启后仍会使用环境变量里的值"
+            )
+
+        view = settings.public_view()
+        view["saved_to"] = saved_to
+        return JSONResponse(
+            content={
+                "ok": True,
+                "settings": view,
+                "bot": bot,
+                "chat_check": chat_check,
+                "warnings": warnings,
+            }
+        )
+
     @application.get("/api/me", dependencies=[auth])
-    async def me() -> dict[str, Any]:
+    async def me() -> JSONResponse:
         try:
             async with TelegramClient(settings=settings) as client:
                 info = await client.get_me()
         except (ConfigError, TelegramAPIError, TelemsgError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"ok": True, "bot": info}
+            diagnosis = explain(exc)
+            return JSONResponse(status_code=400, content={"ok": False, **diagnosis.as_dict()})
+        return JSONResponse(content={"ok": True, "bot": info})
 
     # ------------------------------------------------------------- draft
     @application.post("/api/preview", dependencies=[auth])
     async def preview(payload: PreviewRequest) -> dict[str, Any]:
         # 空草稿是编辑器的正常初始状态，不该报错刷屏
         if _is_empty_draft(payload.draft):
-            return {"ok": True, "html": EMPTY_BUBBLE, "report": {"ok": True, "errors": [], "warnings": []}}
+            return {
+                "ok": True,
+                "html": EMPTY_BUBBLE,
+                "report": {"ok": True, "errors": [], "warnings": [], "notes": []},
+            }
         try:
             draft = _parse_draft(payload.draft)
         except HTTPException as exc:
@@ -203,6 +324,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "ok": False,
                     "errors": [{"severity": "error", "field": "draft", "message": str(exc.detail)}],
                     "warnings": [],
+                    "notes": [],
                 },
             }
         report = validate_draft(draft)
@@ -231,13 +353,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             async with TelegramClient(settings=settings) as client:
                 service = PostService(client, settings=settings, store=store)
                 result = await service.send(draft, chat_id=payload.chat_id, dry_run=payload.dry_run)
-        except TelegramAPIError as exc:
+        except Exception as exc:  # noqa: BLE001 - 统一翻译成可读诊断再回给界面
+            diagnosis = explain(exc)
             return JSONResponse(
                 status_code=400,
-                content={"ok": False, "error": exc.description, "error_code": exc.error_code},
+                content={
+                    "ok": False,
+                    "error": diagnosis.message,
+                    "hint": diagnosis.hint,
+                    "action": diagnosis.action,
+                    "raw": diagnosis.raw,
+                    "error_code": getattr(exc, "error_code", None),
+                },
             )
-        except TelemsgError as exc:
-            return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
         return JSONResponse(content={"ok": result.ok, "result": result.model_dump(mode="json")})
 
     # ------------------------------------------------------------ upload

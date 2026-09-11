@@ -19,6 +19,14 @@
     el._t = setTimeout(() => { el.className = "toast " + (kind || ""); }, 4200);
   }
 
+  /* 统一的失败提示：后端会把 Telegram 的英文错误翻译成「问题 + 怎么办」 */
+  function toastError(data, fallback) {
+    const message = data.error || data.detail || fallback || "操作失败";
+    const text = typeof message === "string" ? message : JSON.stringify(message);
+    toast(data.hint ? text + "　👉 " + data.hint : text, "err");
+    if (data.action === "open_settings") openSetup(1);
+  }
+
   function escapeHtml(s) {
     return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => (
       { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
@@ -119,28 +127,35 @@
     if (isEmpty) {
       $("#previewHost").innerHTML =
         '<div class="tg-bubble tg-empty"><span>在这里开始写正文，或拖入一张图片…</span></div>';
-      renderIssues([], "还没有内容，写点什么就能看到预览");
+      renderIssues([], [], "还没有内容，写点什么就能看到预览");
       return;
     }
     const data = await api("/api/preview", { method: "POST", body: JSON.stringify({ draft: draft }) });
     if (!data.ok) {
-      renderIssues([{ severity: "error", field: "draft", message: data.detail || data.error || "草稿不合法" }]);
+      toastError(data, "草稿不合法");
       return;
     }
     $("#previewHost").innerHTML = data.html;
-    renderIssues((data.report.errors || []).concat(data.report.warnings || []));
+    renderIssues(
+      (data.report.errors || []).concat(data.report.warnings || []),
+      data.report.notes || []
+    );
   }
 
-  function renderIssues(issues, emptyMessage) {
+  function renderIssues(issues, notes, emptyMessage) {
     const host = $("#issues");
-    if (!issues.length) {
+    const noteList = notes || [];
+    if (!issues.length && !noteList.length) {
       host.innerHTML = '<li class="ok muted">' + escapeHtml(emptyMessage || "✔ 没有发现问题，可以发送") + "</li>";
       return;
     }
-    host.innerHTML = issues.map((i) =>
+    const issuesHtml = issues.map((i) =>
       '<li class="' + escapeHtml(i.severity) + '"><span class="f">' + escapeHtml(i.field) + "</span><br>" +
       escapeHtml(i.message) +
       (i.hint ? '<br><span class="muted">建议：' + escapeHtml(i.hint) + "</span>" : "") + "</li>").join("");
+    const notesHtml = noteList.map((n) =>
+      '<li class="note">ℹ ' + escapeHtml(n) + "</li>").join("");
+    host.innerHTML = (issuesHtml || '<li class="ok muted">✔ 没有发现问题，可以发送</li>') + notesHtml;
   }
 
   function updateCounters() {
@@ -356,9 +371,10 @@
       });
       if (data.ok) {
         toast("发送成功：message_id = " + ((data.result.message_ids || []).join(", ") || "-"), "ok");
+        (data.result.notes || []).forEach((note) => toast("ℹ " + note));
         refreshHistory();
       } else {
-        toast("发送失败：" + (data.error || data.detail || "未知错误"), "err");
+        toastError(data, "发送失败");
       }
     } catch (e) {
       toast("请求异常：" + e.message, "err");
@@ -381,7 +397,7 @@
       }),
     });
     if (data.ok) { toast("已排期（本地时间）：" + fmtTime(data.when), "ok"); refreshSchedules(); }
-    else toast("排期失败：" + (data.detail || data.error || "未知错误"), "err");
+    else toastError(data, "排期失败");
   }
 
   async function saveTemplate() {
@@ -392,7 +408,7 @@
       body: JSON.stringify({ name: name, draft: collectDraft() }),
     });
     if (data.ok) { toast("模板已保存：" + name, "ok"); refreshTemplates(); }
-    else toast("保存失败：" + (data.detail || data.error || ""), "err");
+    else toastError(data, "保存失败");
   }
 
   async function showJson() {
@@ -404,7 +420,7 @@
       $("#jsonOut").textContent = JSON.stringify(data.request, null, 2);
       $("#jsonBox").style.display = "block";
     } else {
-      toast("编译失败：" + (data.detail || data.error || ""), "err");
+      toastError(data, "编译失败");
     }
   }
 
@@ -429,6 +445,141 @@
       await api("/api/schedules/" + btn.dataset.cancel, { method: "DELETE" });
       refreshSchedules();
     }));
+  }
+
+  // ------------------------------------------------------- 设置向导
+  const setupState = { step: 1, botToken: null };
+
+  function openSetup(step) {
+    setupState.step = step || (window.TELEMSG_BOOT.hasToken ? 3 : 1);
+    $("#setupToken").value = "";
+    $("#setupStep1Msg").textContent = window.TELEMSG_BOOT.hasToken
+      ? "当前已配置：" + window.TELEMSG_BOOT.tokenHint + "（留空则保持不变）"
+      : "";
+    $("#setupChat").value = $("#chatId").value || window.TELEMSG_BOOT.defaultChat || "";
+    $("#setupModal").hidden = false;
+    gotoStep(setupState.step);
+  }
+
+  function closeSetup() {
+    $("#setupModal").hidden = true;
+  }
+
+  function gotoStep(step) {
+    setupState.step = step;
+    $$("#setupModal .step-body").forEach((el) => {
+      el.hidden = Number(el.dataset.step) !== step;
+    });
+    $$("#setupSteps li").forEach((li) => {
+      const n = Number(li.dataset.step);
+      li.classList.toggle("active", n === step);
+      li.classList.toggle("done", n < step);
+    });
+    $("#setupTitle").textContent = window.TELEMSG_BOOT.hasToken
+      ? "设置"
+      : "开始使用 TeleMsgCreator";
+  }
+
+  async function saveSettings({ token, chat, persist }) {
+    const body = { persist: persist !== false };
+    if (token) body.bot_token = token;
+    if (chat !== undefined) body.default_chat_id = chat;
+    return await api("/api/settings", { method: "POST", body: JSON.stringify(body) });
+  }
+
+  async function setupVerify() {
+    const token = $("#setupToken").value.trim();
+    if (!token && !window.TELEMSG_BOOT.hasToken) {
+      $("#setupStep1Msg").textContent = "请先填入 Token";
+      return;
+    }
+    $("#setupNext1").disabled = true;
+    $("#setupStep1Msg").textContent = "正在验证…";
+    try {
+      const data = await saveSettings({ token: token || null, persist: true });
+      if (!data.ok) {
+        $("#setupStep1Msg").textContent = "";
+        const err = $("#setupError");
+        err.hidden = false;
+        err.innerHTML = "<b>❌ " + escapeHtml(data.error || "验证失败") + "</b>" +
+          (data.hint ? "<br><span class='muted'>" + escapeHtml(data.hint) + "</span>" : "") +
+          (data.raw ? "<br><span class='muted'>原文：" + escapeHtml(data.raw) + "</span>" : "");
+        $("#setupNext1").disabled = false;
+        toastError(data, "验证失败");
+        return;
+      }
+      $("#setupError").hidden = true;
+      applySettingsResult(data);
+      gotoStep(2);
+    } catch (e) {
+      $("#setupStep1Msg").textContent = "请求失败：" + e.message;
+    } finally {
+      $("#setupNext1").disabled = false;
+    }
+  }
+
+  function applySettingsResult(data) {
+    const s = data.settings || {};
+    window.TELEMSG_BOOT.hasToken = s.has_token;
+    window.TELEMSG_BOOT.tokenHint = s.token_hint;
+    window.TELEMSG_BOOT.defaultChat = s.default_chat_id || "";
+    if (s.default_chat_id !== undefined) $("#chatId").value = s.default_chat_id;
+    updateTokenBadge(s);
+
+    const box = $("#setupBotInfo");
+    if (data.bot) {
+      box.className = "result-box";
+      box.innerHTML = "✅ 已验证：<b>@" + escapeHtml(data.bot.username) + "</b>" +
+        "<br><span class='muted'>" + escapeHtml(data.bot.first_name || "") + " · id " +
+        escapeHtml(String(data.bot.id)) + "</span>" +
+        (s.saved_to ? "<br><span class='muted'>已保存到 " + escapeHtml(s.saved_to) + "</span>" : "");
+    }
+    if (data.chat_check) {
+      box.innerHTML += data.chat_check.ok
+        ? "<br>✅ 目标频道可访问：<b>" + escapeHtml(data.chat_check.title) + "</b>"
+        : "<br>⚠️ 目标频道暂时访问不到：<span class='muted'>" +
+          escapeHtml(data.chat_check.error || "") + "</span>";
+      if (!data.chat_check.ok) box.className = "result-box warn";
+    }
+    (data.warnings || []).forEach((w) => {
+      box.innerHTML += "<br><span style='color:var(--warn)'>⚠️ " + escapeHtml(w) + "</span>";
+    });
+  }
+
+  function updateTokenBadge(s) {
+    const badges = $$("header .badge");
+    if (badges.length < 2) return;
+    const badge = badges[1];
+    if (s.has_token) {
+      badge.className = "badge ok";
+      badge.textContent = "Token 已配置 · " + s.token_hint;
+    } else {
+      badge.className = "badge err";
+      badge.textContent = "缺少 Bot Token（点右上角「设置」）";
+    }
+  }
+
+  async function setupSaveChat(skip) {
+    const chat = skip ? "" : $("#setupChat").value.trim();
+    const data = await saveSettings({ chat: chat, persist: true });
+    if (!data.ok) {
+      toastError(data, "保存失败");
+      return;
+    }
+    applySettingsResult(data);
+    const done = $("#setupDone");
+    done.className = "result-box";
+    done.innerHTML =
+      "✅ 配置已保存" +
+      (data.settings && data.settings.saved_to
+        ? "<br><span class='muted'>写入 " + escapeHtml(data.settings.saved_to) + "</span>"
+        : "<br><span class='muted'>仅在本次运行内生效</span>") +
+      (chat ? "<br>默认发送到：<b>" + escapeHtml(chat) + "</b>" : "") +
+      "<br><br>别忘了把机器人加进频道并给「发布消息」权限，否则发送时会报 chat not found。";
+    (data.warnings || []).forEach((w) => {
+      done.innerHTML += "<br><span style='color:var(--warn)'>⚠️ " + escapeHtml(w) + "</span>";
+    });
+    gotoStep(4);
   }
 
   // -------------------------------------------------------------- init
@@ -491,7 +642,29 @@
     $("#checkBot").addEventListener("click", async () => {
       const data = await api("/api/me");
       if (data.ok) toast("机器人 @" + data.bot.username + " 连接正常", "ok");
-      else toast("连接失败：" + (data.detail || data.error || ""), "err");
+      else toastError(data, "连接失败");
     });
+
+    // 设置向导
+    $("#openSettings").addEventListener("click", () => openSetup());
+    $("#setupClose").addEventListener("click", closeSetup);
+    $("#setupModal").addEventListener("click", (e) => {
+      if (e.target.id === "setupModal") closeSetup();
+    });
+    $("#setupNext1").addEventListener("click", setupVerify);
+    $("#setupBack2").addEventListener("click", () => gotoStep(1));
+    $("#setupNext2").addEventListener("click", () => gotoStep(3));
+    $("#setupSkipChat").addEventListener("click", () => setupSaveChat(true));
+    $("#setupSaveChat").addEventListener("click", () => setupSaveChat(false));
+    $("#setupFinish").addEventListener("click", closeSetup);
+    $("#setupToken").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); setupVerify(); }
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && !$("#setupModal").hidden) closeSetup();
+    });
+
+    // 首次进入且没有 token 时，直接把引导摆出来
+    if (!window.TELEMSG_BOOT.hasToken) openSetup(1);
   });
 })();
