@@ -49,3 +49,20 @@ def test_markdown_does_not_break_on_html_injection() -> None:
 def test_plain_text_and_visible_length() -> None:
     assert plain_text("<b>hello</b>") == "hello"
     assert visible_length("<b>hello</b>") == 5
+
+
+def test_markdown_to_html_can_preserve_real_html_tags() -> None:
+    """escape=False 用于 parse_mode=HTML：只转强调语法，不动用户写的标签。"""
+    html = markdown_to_telegram_html("<b>真的加粗</b> 和 **语法加粗**", escape=False)
+    assert html == "<b>真的加粗</b> 和 <b>语法加粗</b>"
+
+
+def test_markdown_to_html_without_escape_still_escapes_code_content() -> None:
+    """反引号里的内容必须字面显示，不能被当成标签。"""
+    html = markdown_to_telegram_html("`<b>x</b>`", escape=False)
+    assert html == "<code>&lt;b&gt;x&lt;/b&gt;</code>"
+
+
+def test_markdown_to_html_without_escape_is_noop_for_plain_text() -> None:
+    text = "普通文本，没有语法"
+    assert markdown_to_telegram_html(text, escape=False) == text

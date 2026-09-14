@@ -90,3 +90,45 @@ def test_send_options_and_thread() -> None:
     assert spec.params["disable_notification"] is True
     assert spec.params["protect_content"] is True
     assert spec.params["message_thread_id"] == 42
+
+
+def test_html_parse_mode_applies_emphasis_syntax() -> None:
+    """回归：界面承诺 HTML 支持 ** 语法，发出去必须真的是 <b>，不能是字面星号。"""
+    draft = Draft(chat_id="@c", text="**Discover Smart Money**", parse_mode="HTML")
+    spec = build_requests(draft)[0]
+    assert spec.params["text"] == "<b>Discover Smart Money</b>"
+    assert spec.params["parse_mode"] == "HTML"
+
+
+def test_html_parse_mode_applies_syntax_to_caption() -> None:
+    draft = Draft(
+        chat_id="@c",
+        media=Media(kind="photo", source="https://a/1.jpg", caption="**加粗**", parse_mode="HTML"),
+    )
+    spec = build_requests(draft)[0]
+    assert spec.params["caption"] == "<b>加粗</b>"
+
+
+def test_html_parse_mode_applies_syntax_to_media_group_caption() -> None:
+    draft = Draft(
+        chat_id="@c",
+        media_group=[
+            Media(kind="photo", source="https://a/1.jpg", caption="**第一张**", parse_mode="HTML"),
+            Media(kind="photo", source="https://a/2.jpg"),
+        ],
+    )
+    spec = build_requests(draft)[0]
+    assert spec.params["media"][0]["caption"] == "<b>第一张</b>"
+
+
+def test_html_parse_mode_keeps_real_tags() -> None:
+    draft = Draft(chat_id="@c", text="<i>原生斜体</i>", parse_mode="HTML")
+    assert build_requests(draft)[0].params["text"] == "<i>原生斜体</i>"
+
+
+def test_non_html_parse_modes_are_left_untouched() -> None:
+    """MarkdownV2 与纯文本由 Telegram 自己解析，我们不能替它改字。"""
+    plain = Draft(chat_id="@c", text="**x**", parse_mode="MarkdownV2")
+    assert build_requests(plain)[0].params["text"] == "**x**"
+    bare = Draft(chat_id="@c", text="**x**", parse_mode=None)
+    assert build_requests(bare)[0].params["text"] == "**x**"

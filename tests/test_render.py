@@ -70,6 +70,24 @@ def test_button_style_colors_rendered() -> None:
     assert "--btn-accent:#e0533d" in render_bubble_html(draft)
 
 
+def test_html_mode_converts_markdown_emphasis() -> None:
+    """回归：HTML 模式下 **粗体** 之前既不生效、也不会去掉星号。"""
+    html = sanitize_rich_text("**Discover Smart Money**", "HTML")
+    assert html == "<b>Discover Smart Money</b>"
+    assert "**" not in html
+
+
+def test_html_mode_keeps_original_tags_alongside_syntax() -> None:
+    html = sanitize_rich_text("<i>原生斜体</i> 与 **语法加粗**", "HTML")
+    assert "<i>原生斜体</i>" in html
+    assert "<b>语法加粗</b>" in html
+
+
+def test_plain_mode_leaves_asterisks_alone() -> None:
+    """纯文本模式就是纯文本，不做语法转换（这是用户主动选的）。"""
+    assert sanitize_rich_text("**x**", None) == "**x**"
+
+
 def test_web_app_button_icon() -> None:
     draft = Draft(
         chat_id="@c",

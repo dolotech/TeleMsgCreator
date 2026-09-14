@@ -10,6 +10,7 @@ from typing import Any
 
 from . import limits
 from .errors import MediaSourceError
+from .markup import markdown_to_telegram_html
 from .models import Draft, Media
 
 
@@ -87,6 +88,22 @@ def _base_params(draft: Draft) -> dict[str, Any]:
     return params
 
 
+def _apply_syntax_sugar(text: str | None, parse_mode: str | None) -> str | None:
+    """HTML 模式下把 ``**粗体**`` 这类轻量语法转成真正的标签。
+
+    界面上的格式下拉框写明「HTML 支持 ** 语法自动转换」，如果不在这里转换，
+    Telegram 收到的是字面量 ``**粗体**``——预览看着像加粗、发出去却不是，
+    正是最容易被误判成「工具坏了」的那种不一致。
+
+    ``escape=False``：HTML 模式允许用户直接写 ``<b>`` 等标签，不能被转义掉。
+    """
+    if text is None:
+        return None
+    if (parse_mode or "").upper() == "HTML":
+        return markdown_to_telegram_html(text, escape=False)
+    return text
+
+
 def _attach_keyboard(params: dict[str, Any], draft: Draft) -> None:
     if draft.keyboard.rows:
         params["reply_markup"] = draft.keyboard.to_api()
@@ -94,7 +111,7 @@ def _attach_keyboard(params: dict[str, Any], draft: Draft) -> None:
 
 def _build_text(draft: Draft) -> RequestSpec:
     params = _base_params(draft)
-    params["text"] = draft.text or ""
+    params["text"] = _apply_syntax_sugar(draft.text, draft.parse_mode) or ""
     if draft.parse_mode:
         params["parse_mode"] = draft.parse_mode
     if draft.link_preview_options:
@@ -132,7 +149,7 @@ def _build_single_media(draft: Draft, *, collect_uploads: bool) -> RequestSpec:
         params["document"] = sources.ref
 
     if media.caption:
-        params["caption"] = media.caption
+        params["caption"] = _apply_syntax_sugar(media.caption, media.parse_mode)
         if media.parse_mode:
             params["parse_mode"] = media.parse_mode
     _attach_keyboard(params, draft)
@@ -149,7 +166,7 @@ def _build_media_group(draft: Draft, *, collect_uploads: bool) -> RequestSpec:
         uploads.extend(sources.uploads)
         entry: dict[str, Any] = {"type": media.kind, "media": sources.ref}
         if media.caption:
-            entry["caption"] = media.caption
+            entry["caption"] = _apply_syntax_sugar(media.caption, media.parse_mode)
             if media.parse_mode:
                 entry["parse_mode"] = media.parse_mode
         if media.has_spoiler:

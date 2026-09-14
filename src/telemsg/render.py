@@ -108,7 +108,9 @@ def sanitize_rich_text(text: str | None, parse_mode: str | None) -> str:
 
     mode = (parse_mode or "").upper()
     if mode == "HTML":
-        source = text
+        # parse_mode=HTML 也承诺支持 **粗体** 这类轻量语法（见界面的格式下拉框），
+        # 所以先做一次强调转换；escape=False 是为了不破坏用户写的 <b> 等真实标签
+        source = markdown_to_telegram_html(text, escape=False)
     elif mode in {"MARKDOWN", "MARKDOWNV2"}:
         source = markdown_to_telegram_html(text)
     else:

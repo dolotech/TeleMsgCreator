@@ -47,12 +47,18 @@ def _protect(store: list[str], value: str) -> str:
     return _PLACEHOLDER.format(len(store) - 1)
 
 
-def markdown_to_telegram_html(text: str, *, allow_links: bool = True) -> str:
+def markdown_to_telegram_html(
+    text: str, *, allow_links: bool = True, escape: bool = True
+) -> str:
     """把轻量 Markdown 转成 Telegram 支持的 HTML 子集。
 
     支持语法：``**粗体**``、``__斜体__``、``~~删除线~~``、``||剧透||``、
     ``` `行内代码` ```、```` ```代码块``` ````、``[文本](https://链接)``。
     未支持的语法原样保留（已转义），不会导致发送失败。
+
+    :param escape: 为 True（默认）时先整体转义 HTML 特殊字符，适合纯 Markdown 场景；
+        为 False 时保留原始 HTML 标签，用于 parse_mode=HTML 的输入——
+        此时只做强调语法转换，`<b>` 这类标签原样留给调用方处理。
     """
     placeholders: list[str] = []
     work = text
@@ -71,7 +77,8 @@ def markdown_to_telegram_html(text: str, *, allow_links: bool = True) -> str:
         lambda m: _protect(placeholders, f"<code>{html.escape(m.group(1), quote=False)}</code>"), work
     )
 
-    work = escape_html(work)
+    if escape:
+        work = escape_html(work)
 
     if allow_links:
         work = _LINK_RE.sub(_link_repl, work)
