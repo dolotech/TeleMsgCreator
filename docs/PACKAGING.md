@@ -180,6 +180,31 @@ start.bat       :: 真正跑一次
 
 ## 七、常见问题
 
+**Q：`./build_release.py` 报 `ModuleNotFoundError: No module named 'httpx'`？**
+
+这是**设计缺陷已修复**的历史问题。打包器只用标准库，但 `import telemsg` 会先执行
+`telemsg/__init__.py`，它曾经急切导入 `TelegramClient` / `PostService`，把
+httpx、pydantic、fastapi 整条链拉起来——于是「只想打个包」被迫先装好整个运行时。
+
+现在 `__init__.py` 是惰性的（PEP 562），`import telemsg.release` 不再触发任何第三方导入。
+打包器因此可以在**完全没装依赖**的解释器上运行，最低支持 Python 3.8。
+
+如果还看到这个错误，说明源码不完整或路径不对，而不是环境缺依赖。
+
+**Q：应该用哪个 Python 跑打包脚本？**
+
+随便，只要 ≥ 3.8。三种都验证过：
+
+```bash
+./scripts/build_release.py --target windows                    # shebang，用 PATH 里的 python3
+/usr/bin/python3 scripts/build_release.py --target windows     # macOS 自带 3.9，可以
+.venv/bin/python scripts/build_release.py --target windows     # 项目虚拟环境
+```
+
+唯一有版本要求的是**下载 wheel** 那一步，需要 pip 20.3+。脚本会自动挑一个带合适
+pip 的解释器——优先项目 `.venv`，其次当前解释器——并把选中的解释器与 pip 版本
+打印出来。macOS 命令行工具自带的 pip 是 21.x，能用但偏旧，所以有 `.venv` 时会优先用它。
+
 **Q：能不能做成单文件 exe？**
 可以，但必须在 Windows 上用 PyInstaller。而且单文件模式每次启动都要把内容解压到临时目录，
 启动慢、还容易被杀毒软件误报。绿色文件夹更稳，也方便用户看到 `data/` 里存了什么。

@@ -85,8 +85,33 @@ def test_project_dependencies_are_unique(builder) -> None:
     assert len(keys) == len(set(keys)), f"依赖有重复：{keys}"
 
 
+def test_fallback_deps_match_pyproject(builder) -> None:
+    """Python 3.9 没有 tomllib，会退回 FALLBACK_DEPS；两者不能各说各话。"""
+    import tomllib
+
+    data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    declared = set(data["project"]["dependencies"])
+    declared |= set(data["project"]["optional-dependencies"]["bundle"])
+    declared |= set(data["project"]["optional-dependencies"]["media"])
+
+    fallback = set(builder.FALLBACK_DEPS)
+    assert declared == fallback, (
+        "FALLBACK_DEPS 与 pyproject 不一致——"
+        f"只在 pyproject：{sorted(declared - fallback)}；"
+        f"只在 FALLBACK：{sorted(fallback - declared)}"
+    )
+
+
 # --------------------------------------------------------------- pip 命令
-def test_cross_install_builds_windows_command(builder, tmp_path: Path, monkeypatch) -> None:
+@pytest.fixture()
+def fake_pip(builder, monkeypatch):
+    """把「找一个带 pip 的解释器」这一步固定下来，便于断言真正的安装命令。"""
+    monkeypatch.setattr(builder, "find_pip_python", lambda: ("/fake/python", "pip 25.0.1"))
+
+
+def test_cross_install_builds_windows_command(
+    builder, fake_pip, tmp_path: Path, monkeypatch
+) -> None:
     captured: dict = {}
 
     def fake_run(cmd, **kwargs):
@@ -98,6 +123,7 @@ def test_cross_install_builds_windows_command(builder, tmp_path: Path, monkeypat
     builder.cross_install_windows(["httpx>=0.27"], target, python_version="3.12.10")
 
     cmd = captured["cmd"]
+    assert cmd[0] == "/fake/python"
     assert "--platform" in cmd and cmd[cmd.index("--platform") + 1] == "win_amd64"
     assert cmd[cmd.index("--python-version") + 1] == "3.12"
     assert cmd[cmd.index("--abi") + 1] == "cp312"
@@ -108,7 +134,7 @@ def test_cross_install_builds_windows_command(builder, tmp_path: Path, monkeypat
 
 
 def test_cross_install_retries_with_trusted_host_on_tls_error(
-    builder, tmp_path: Path, monkeypatch
+    builder, fake_pip, tmp_path: Path, monkeypatch
 ) -> None:
     """公司代理做 TLS 中间人时，应自动降级重试而不是直接失败。"""
     calls: list[list[str]] = []
@@ -126,7 +152,9 @@ def test_cross_install_retries_with_trusted_host_on_tls_error(
     assert "--trusted-host" in calls[1]
 
 
-def test_cross_install_raises_with_hint_on_unresolvable(builder, tmp_path: Path, monkeypatch) -> None:
+def test_cross_install_raises_with_hint_on_unresolvable(
+    builder, fake_pip, tmp_path: Path, monkeypatch
+) -> None:
     def fake_run(cmd, **kwargs):
         return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="ERROR: ResolutionImpossible")
 

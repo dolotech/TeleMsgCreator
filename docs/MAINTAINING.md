@@ -191,6 +191,7 @@ python-3.12.x-embed-amd64.zip                    ← python.org 官方免安装�
 | cron 星期做了转换 | 标准 cron 里 `1` 是周一，APScheduler 里 `1` 是周二 |
 | 媒体组带按钮直接报错 | Telegram 的 album 不支持 inline keyboard，静默失败比报错难排查得多 |
 | 空 `Draft` 返回占位预览 | 编辑器初始状态本来就该是空的，不该刷 422 错误 |
+| `telemsg/__init__.py` 惰性导出（PEP 562） | 打包器只用标准库，不能被 httpx 等运行时依赖挡住；有测试用 meta_path 拦截第三方模块来盯着这条 |
 
 ---
 

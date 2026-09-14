@@ -47,6 +47,73 @@ class BuildError(RuntimeError):
     """打包过程中的可预期失败。"""
 
 
+#: 打包器刻意只用标准库，最低支持到 Python 3.8——
+#: 「在任意系统上构建」意味着不能被运行时的依赖和版本挡住。
+MIN_PYTHON = (3, 8)
+
+
+def ensure_python_version() -> None:
+    if sys.version_info < MIN_PYTHON:
+        required = ".".join(str(part) for part in MIN_PYTHON)
+        raise BuildError(
+            f"打包器需要 Python {required} 及以上，当前是 "
+            f"{platform.python_version()}（{sys.executable}）。\n"
+            "macOS 自带的 /usr/bin/python3 往往偏旧，可以改用项目虚拟环境：\n"
+            "  .venv/bin/python scripts/build_release.py --target windows"
+        )
+
+
+#: ``pip install --platform`` 需要 pip 20.3 及以上
+MIN_PIP_VERSION = (20, 3)
+
+
+def find_pip_python() -> tuple[str, str]:
+    """挑一个带 pip 的解释器来下载 wheel。
+
+    打包器自身只用标准库，但交叉安装依赖必须有 pip，而且 ``--platform``
+    要 pip 20.3+。macOS 命令行工具自带的 pip 通常是 21.x，能用但偏旧；
+    项目虚拟环境里的 pip 一般更新，所以优先用它。
+    """
+    candidates: list[str] = []
+    venv_python = (
+        ROOT / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    )
+    if venv_python.exists():
+        candidates.append(str(venv_python))
+    if sys.executable not in candidates:
+        candidates.append(sys.executable)
+
+    problems: list[str] = []
+    for candidate in candidates:
+        try:
+            result = subprocess.run(
+                [candidate, "-m", "pip", "--version"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError as exc:
+            problems.append(f"{candidate}: {exc}")
+            continue
+        if result.returncode != 0:
+            problems.append(f"{candidate}: 没有可用的 pip")
+            continue
+        version = result.stdout.strip().split(" from ")[0]  # "pip 25.0.1"
+        numbers = tuple(int(p) for p in version.split()[1].split(".")[:2] if p.isdigit())
+        if numbers and numbers < MIN_PIP_VERSION:
+            problems.append(f"{candidate}: {version} 版本过旧（需要 20.3+）")
+            continue
+        return candidate, version
+
+    detail = "\n".join(f"  · {item}" for item in problems) or "  · 未找到任何解释器"
+    raise BuildError(
+        "找不到可用的 pip 来下载 Windows wheel。\n"
+        f"{detail}\n"
+        "解决办法：先建好虚拟环境并安装 pip——\n"
+        "  python3 -m venv .venv && .venv/bin/python -m pip install -U pip"
+    )
+
+
 def find_project_root(start: Path | None = None) -> Path:
     """定位源码根目录（同时含 pyproject.toml 与 packaging/）。
 
@@ -78,16 +145,18 @@ BUILD = ROOT / "build"
 CACHE = BUILD / "cache"
 DIST = ROOT / "dist"
 
-#: 找不到 pyproject 时的兜底依赖列表（正常情况下以 pyproject 为准）
+#: 找不到 pyproject（或 Python < 3.11 没有 tomllib）时的兜底依赖列表。
+#: **必须与 pyproject.toml 的 dependencies + bundle + media 完全一致**，
+#: 否则用不同 Python 版本打包会装到不同的依赖版本。有测试盯着这件事。
 FALLBACK_DEPS = [
-    "pydantic>=2.6",
-    "pydantic-settings>=2.2",
-    "httpx>=0.27",
-    "typer>=0.12",
-    "rich>=13.7",
-    "Jinja2>=3.1",
+    "httpx>=0.27,<1",
+    "pydantic>=2.6,<3",
+    "pydantic-settings>=2.2,<3",
+    "typer>=0.12,<1",
+    "rich>=13.7,<15",
+    "Jinja2>=3.1,<4",
     "python-multipart>=0.0.9",
-    "APScheduler>=3.10",
+    "APScheduler>=3.10,<4",
     "fastapi>=0.110",
     "uvicorn>=0.29",
     "Pillow>=10.2",
@@ -245,7 +314,7 @@ def fetch_embeddable(version: str | None, *, cache: Path, insecure: bool = False
 
 
 # ------------------------------------------------------------- Windows 打包
-@dataclass(slots=True)
+@dataclass
 class WindowsOptions:
     python_version: str | None = None
     out_dir: Path = DIST
@@ -291,8 +360,9 @@ def cross_install_windows(
     minor = ".".join(python_version.split(".")[:2])  # 3.12
     abi = "cp" + minor.replace(".", "")  # cp312
     trusted_hosts = ["--trusted-host", "pypi.org", "--trusted-host", "files.pythonhosted.org"]
+    pip_python, pip_version = find_pip_python()
     base = [
-        sys.executable,
+        pip_python,
         "-m",
         "pip",
         "install",
@@ -311,7 +381,11 @@ def cross_install_windows(
         "--no-compile",
         "--quiet",
     ]
-    log("依赖", f"交叉安装 Windows wheel（cp{minor.replace('.', '')}-win_amd64）")
+    log(
+        "依赖",
+        f"交叉安装 Windows wheel（cp{minor.replace('.', '')}-win_amd64）"
+        f"，使用 {pip_python} · {pip_version}",
+    )
     cmd = [*base, *(trusted_hosts if insecure else []), *packages]
     result = subprocess.run(cmd, capture_output=True, text=True, check=False)
 
@@ -608,6 +682,7 @@ def build_targets(
     CLI 的 ``telemsg build`` 与 :func:`main` 都走这里，保证两条入口行为一致。
     """
     resolved = resolve_target(target)
+    ensure_python_version()
     out_dir.mkdir(parents=True, exist_ok=True)
     CACHE.mkdir(parents=True, exist_ok=True)
 
@@ -651,8 +726,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    describe_build_environment(args.target)
     try:
+        ensure_python_version()
+        describe_build_environment(args.target)
         build_targets(
             args.target,
             python_version=args.python_version,
